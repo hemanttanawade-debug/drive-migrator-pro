@@ -1,3 +1,4 @@
+import { useAuth } from "@/context/AuthContext";
 import { useState, useCallback } from "react";
 import StepIndicator from "./StepIndicator";
 import DomainConfigStep from "./steps/DomainConfigStep";
@@ -34,6 +35,7 @@ const initialState: WizardState = {
 };
 
 const MigrationWizard = () => {
+  const { user, logout } = useAuth();
   const [state, setState] = useState<WizardState>(initialState);
   const { toast } = useToast();
 
@@ -42,8 +44,6 @@ const MigrationWizard = () => {
   const back = () => setStep(state.currentStep - 1);
 
   const handleValidate = useCallback(async () => {
-    // In production, call: validateConnection()
-    // Simulating for demo:
     await new Promise((r) => setTimeout(r, 2000));
     setState((s) => ({
       ...s,
@@ -61,11 +61,13 @@ const MigrationWizard = () => {
         migrationId,
         status: "running",
         totalUsers: s.userMappings.length,
-        logs: [`[${new Date().toISOString()}] Migration started with mode: ${s.migrationConfig.mode}`, `[${new Date().toISOString()}] Migration ID: ${migrationId}`],
+        logs: [
+          `[${new Date().toISOString()}] Migration started with mode: ${s.migrationConfig.mode}`,
+          `[${new Date().toISOString()}] Migration ID: ${migrationId}`,
+        ],
       },
     }));
 
-    // Simulate progress — in production, poll getMigrationStatus()
     const steps = 10;
     for (let i = 1; i <= steps; i++) {
       await new Promise((r) => setTimeout(r, 800));
@@ -75,7 +77,10 @@ const MigrationWizard = () => {
           ...s.migrationProgress,
           filesMigrated: s.migrationProgress.filesMigrated + Math.floor(Math.random() * 5 + 1),
           failedFiles: s.migrationProgress.failedFiles + (Math.random() > 0.85 ? 1 : 0),
-          logs: [...s.migrationProgress.logs, `[${new Date().toISOString()}] Processing batch ${i}/${steps}...`],
+          logs: [
+            ...s.migrationProgress.logs,
+            `[${new Date().toISOString()}] Processing batch ${i}/${steps}...`,
+          ],
         },
       }));
     }
@@ -85,7 +90,10 @@ const MigrationWizard = () => {
       migrationProgress: {
         ...s.migrationProgress,
         status: "completed",
-        logs: [...s.migrationProgress.logs, `[${new Date().toISOString()}] Migration completed successfully.`],
+        logs: [
+          ...s.migrationProgress.logs,
+          `[${new Date().toISOString()}] Migration completed successfully.`,
+        ],
       },
     }));
     toast({ title: "Migration Complete", description: "All files have been processed." });
@@ -109,13 +117,38 @@ const MigrationWizard = () => {
   return (
     <div className="min-h-screen bg-background">
       <header className="border-b bg-card/80 backdrop-blur-sm sticky top-0 z-10">
-        <div className="container mx-auto px-4 py-4 flex items-center gap-3">
-          <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
-            <span className="text-primary-foreground font-bold text-sm">GW</span>
+        <div className="container mx-auto px-4 py-4 flex items-center justify-between">
+          {/* Left: branding */}
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
+              <span className="text-primary-foreground font-bold text-sm">GW</span>
+            </div>
+            <div>
+              <h1 className="text-lg font-bold">GWS Drive Migration Tool</h1>
+              <p className="text-xs text-muted-foreground">
+                Google Workspace Drive-to-Drive Migration
+              </p>
+            </div>
           </div>
-          <div>
-            <h1 className="text-lg font-bold">GWS Drive Migration Tool</h1>
-            <p className="text-xs text-muted-foreground">Google Workspace Drive-to-Drive Migration</p>
+
+          {/* Right: user info + sign out */}
+          <div className="flex items-center gap-4">
+            {user?.picture && (
+              <img
+                src={user.picture}
+                alt={user.name || user.email}
+                className="w-7 h-7 rounded-full"
+              />
+            )}
+            <span className="text-sm text-muted-foreground hidden sm:block">
+              {user?.email}
+            </span>
+            <button
+              onClick={logout}
+              className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+            >
+              Sign out
+            </button>
           </div>
         </div>
       </header>
