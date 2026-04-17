@@ -3,15 +3,16 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import FileUpload from "../FileUpload";
 import type { DomainConfig } from "@/types/migration";
-import { Globe, Mail } from "lucide-react";
+import { Globe, Loader2, Mail } from "lucide-react";
 
 interface Props {
   config: DomainConfig;
   onChange: (config: DomainConfig) => void;
-  onNext: () => void;
+  onSubmit: () => void;
+  isSubmitting: boolean;
 }
 
-const DomainConfigStep = ({ config, onChange, onNext }: Props) => {
+const DomainConfigStep = ({ config, onChange, onSubmit, isSubmitting }: Props) => {
   const update = (key: keyof DomainConfig, value: string | File | null) =>
     onChange({ ...config, [key]: value });
 
@@ -98,8 +99,8 @@ const DomainConfigStep = ({ config, onChange, onNext }: Props) => {
       </Card>
 
       <div className="md:col-span-2 flex justify-end">
-        <Button onClick={onNext} disabled={!isValid} size="lg">
-          Save & Continue
+        <Button onClick={onSubmit} disabled={!isValid || isSubmitting} size="lg">
+          {isSubmitting ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving...</> : "Save & Continue"}
         </Button>
       </div>
     </div>

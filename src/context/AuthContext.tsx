@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from "react";
 import { googleLogout } from "@react-oauth/google";
+import { buildApiUrl } from "@/lib/backend";
 
 interface User {
   email: string;
@@ -18,7 +19,6 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | null>(null);
 const STORAGE_KEY = "gws_user";
-const API_BASE = import.meta.env.VITE_API_URL || "";
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
@@ -42,7 +42,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   }, []);
 
   const handleGoogleSuccess = useCallback(async (idToken: string) => {
-    const res = await fetch(`${API_BASE}/api/auth/verify`, {
+    const res = await fetch(buildApiUrl("/api/auth/verify"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ token: idToken }),

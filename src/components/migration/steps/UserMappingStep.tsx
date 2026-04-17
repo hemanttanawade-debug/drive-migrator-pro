@@ -4,55 +4,38 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import FileUpload from "../FileUpload";
 import type { UserMapping } from "@/types/migration";
-import { Users, AlertCircle } from "lucide-react";
+import { Users, AlertCircle, Loader2 } from "lucide-react";
+import { parseUserMappingCsv } from "../user-mapping-utils";
 
 interface Props {
   csvFile: File | null;
   mappings: UserMapping[];
   onFileChange: (file: File | null) => void;
   onMappingsChange: (mappings: UserMapping[]) => void;
-  onNext: () => void;
+  onSubmit: () => void;
   onBack: () => void;
+  isSubmitting: boolean;
 }
 
-const UserMappingStep = ({ csvFile, mappings, onFileChange, onMappingsChange, onNext, onBack }: Props) => {
+const UserMappingStep = ({ csvFile, mappings, onFileChange, onMappingsChange, onSubmit, onBack, isSubmitting }: Props) => {
   const [error, setError] = useState<string | null>(null);
 
   const handleFile = useCallback(
-    (file: File | null) => {
+    async (file: File | null) => {
       setError(null);
       onFileChange(file);
       if (!file) {
         onMappingsChange([]);
         return;
       }
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const text = e.target?.result as string;
-        const lines = text.trim().split("\n");
-        if (lines.length < 2) {
-          setError("CSV must have a header row and at least one data row");
-          return;
-        }
-        const header = lines[0].toLowerCase();
-        if (!header.includes("source") || !header.includes("destination")) {
-          setError("CSV must have source_user and destination_user columns");
-          return;
-        }
-        const parsed: UserMapping[] = [];
-        for (let i = 1; i < lines.length; i++) {
-          const cols = lines[i].split(",").map((c) => c.trim());
-          if (cols.length >= 2 && cols[0] && cols[1]) {
-            parsed.push({ sourceUser: cols[0], destinationUser: cols[1] });
-          }
-        }
-        if (parsed.length === 0) {
-          setError("No valid mappings found in CSV");
-          return;
-        }
-        onMappingsChange(parsed);
-      };
-      reader.readAsText(file);
+
+      try {
+        const parsed = parseUserMappingCsv(await file.text());
+        onMappingsChange(parsed.mappings);
+      } catch (csvError) {
+        setError(csvError instanceof Error ? csvError.message : "Invalid CSV format.");
+        onMappingsChange([]);
+      }
     },
     [onFileChange, onMappingsChange]
   );
@@ -64,7 +47,7 @@ const UserMappingStep = ({ csvFile, mappings, onFileChange, onMappingsChange, on
           <Users className="w-5 h-5 text-primary" /> User Mapping
         </CardTitle>
         <CardDescription>
-          Upload a CSV with <code className="text-xs bg-muted px-1 py-0.5 rounded">source_user,destination_user</code> columns
+          Upload a CSV with <code className="text-xs bg-muted px-1 py-0.5 rounded">source,destination</code> or <code className="text-xs bg-muted px-1 py-0.5 rounded">source_user,destination_user</code> columns
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -105,7 +88,9 @@ const UserMappingStep = ({ csvFile, mappings, onFileChange, onMappingsChange, on
 
         <div className="flex justify-between pt-2">
           <Button variant="outline" onClick={onBack}>Back</Button>
-          <Button onClick={onNext} disabled={mappings.length === 0}>Continue</Button>
+          <Button onClick={onSubmit} disabled={mappings.length === 0 || isSubmitting}>
+            {isSubmitting ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Uploading...</> : "Upload & Continue"}
+          </Button>
         </div>
       </CardContent>
     </Card>

@@ -2,14 +2,15 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import type { MigrationConfig, MigrationMode } from "@/types/migration";
-import { HardDrive, Share2, Layers, RotateCcw } from "lucide-react";
+import { HardDrive, Share2, Layers, RotateCcw, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface Props {
   config: MigrationConfig;
   onChange: (config: MigrationConfig) => void;
-  onNext: () => void;
+  onSubmit: () => void;
   onBack: () => void;
+  isSubmitting: boolean;
 }
 
 const modes: { value: MigrationMode; label: string; desc: string; icon: React.ReactNode; cmd: string }[] = [
@@ -19,7 +20,7 @@ const modes: { value: MigrationMode; label: string; desc: string; icon: React.Re
   { value: "resume", label: "Resume Failed", desc: "Resume a previously failed migration by ID", icon: <RotateCcw className="w-5 h-5" />, cmd: "--mode resume" },
 ];
 
-const MigrationModeStep = ({ config, onChange, onNext, onBack }: Props) => {
+const MigrationModeStep = ({ config, onChange, onSubmit, onBack, isSubmitting }: Props) => {
   const isValid = config.mode !== "resume" || (config.resumeMigrationId && config.resumeMigrationId.trim().length > 0);
 
   return (
@@ -67,7 +68,9 @@ const MigrationModeStep = ({ config, onChange, onNext, onBack }: Props) => {
 
         <div className="flex justify-between pt-2">
           <Button variant="outline" onClick={onBack}>Back</Button>
-          <Button onClick={onNext} disabled={!isValid}>Continue</Button>
+          <Button onClick={onSubmit} disabled={!isValid || isSubmitting}>
+            {isSubmitting ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving...</> : "Save & Continue"}
+          </Button>
         </div>
       </CardContent>
     </Card>

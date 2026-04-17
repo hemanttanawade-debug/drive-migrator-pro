@@ -8,7 +8,7 @@
  * here — each function path already includes /api/...).
  */
 
-const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
+import { buildApiUrl } from "@/lib/backend";
 
 // ─── Auth token helper ────────────────────────────────────────────────────────
 
@@ -49,7 +49,15 @@ export async function apiFetch(
     headers.set("Content-Type", "application/json");
   }
 
-  const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  let res: Response;
+
+  try {
+    res = await fetch(buildApiUrl(path), { ...options, headers });
+  } catch {
+    throw new Error(
+      "Cannot reach the Flask API. Check VITE_API_URL and allow this frontend origin in Flask CORS."
+    );
+  }
 
   if (res.status === 401) forceRelogin();
 
@@ -68,34 +76,58 @@ async function parseJSON<T>(res: Response, errorMsg: string): Promise<T> {
 
 // ─── API calls ────────────────────────────────────────────────────────────────
 
+export async function createMigrationSession(): Promise<{
+  sessionId: string;
+  message: string;
+}> {
+  const res = await apiFetch("/api/config/new", { method: "POST" });
+  return parseJSON(res, "Failed to start a new migration session");
+}
+
 export async function saveConfig(
   formData: FormData
-): Promise<{ success: boolean; message: string }> {
+): Promise<{ success: boolean; message: string; sessionId: string }> {
   const res = await apiFetch("/api/config", { method: "POST", body: formData });
   return parseJSON(res, "Failed to save configuration");
 }
 
 export async function uploadUserMapping(
-  file: File
+  file: File,
+  sessionId?: string
 ): Promise<{ mappings: { sourceUser: string; destinationUser: string }[] }> {
   const formData = new FormData();
   formData.append("file", file);
+  if (sessionId) formData.append("sessionId", sessionId);
   const res = await apiFetch("/api/user-mapping", { method: "POST", body: formData });
   return parseJSON(res, "Failed to upload user mapping");
 }
 
-export async function validateConnection(): Promise<{
+export async function validateConnection(sessionId?: string): Promise<{
   source: boolean;
   destination: boolean;
   errors?: string[];
 }> {
-  const res = await apiFetch("/api/validate", { method: "POST" });
+  const res = await apiFetch("/api/validate", {
+    method: "POST",
+    body: JSON.stringify(sessionId ? { sessionId } : {}),
+  });
   return parseJSON(res, "Failed to validate connection");
+}
+
+export async function saveMigrationMode(
+  mode: string,
+  sessionId?: string
+): Promise<{ success: boolean; mode: string; message: string }> {
+  const res = await apiFetch("/api/migration-mode", {
+    method: "POST",
+    body: JSON.stringify({ mode, ...(sessionId ? { sessionId } : {}) }),
+  });
+  return parseJSON(res, "Failed to save migration mode");
 }
 
 export async function startMigration(
   mode: string,
-  opts?: { migrationId?: string }
+  opts?: { migrationId?: string; sessionId?: string }
 ): Promise<{ migrationId: string }> {
   const res = await apiFetch("/api/migrate", {
     method: "POST",
@@ -105,6 +137,7 @@ export async function startMigration(
 }
 
 export async function getMigrationStatus(migrationId: string): Promise<{
+  migrationId?: string;
   status: string;
   totalUsers: number;
   filesMigrated: number;
@@ -112,7 +145,27 @@ export async function getMigrationStatus(migrationId: string): Promise<{
   logs: string[];
 }> {
   const res = await apiFetch(`/api/migration/${migrationId}/status`);
-  return parseJSON(res, "Failed to get migration status");
+  const data = await parseJSON<{
+    migrationId?: string;
+    migration_id?: string;
+    status: string;
+    totalUsers?: number;
+    total_users?: number;
+    filesMigrated?: number;
+    files_migrated?: number;
+    failedFiles?: number;
+    failed_files?: number;
+    logs?: string[];
+  }>(res, "Failed to get migration status");
+
+  return {
+    migrationId: data.migrationId ?? data.migration_id,
+    status: data.status,
+    totalUsers: data.totalUsers ?? data.total_users ?? 0,
+    filesMigrated: data.filesMigrated ?? data.files_migrated ?? 0,
+    failedFiles: data.failedFiles ?? data.failed_files ?? 0,
+    logs: data.logs ?? [],
+  };
 }
 
 export async function getMigrationLogs(
