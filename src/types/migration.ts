@@ -37,6 +37,8 @@ export interface MigrationProgress {
 
 export interface WizardState {
   currentStep: number;
+  sessionId: string;
+  completedSteps: number[];
   domainConfig: DomainConfig;
   userMappings: UserMapping[];
   csvFile: File | null;
