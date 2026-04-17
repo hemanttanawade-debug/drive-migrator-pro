@@ -1,18 +1,20 @@
-import { useState, useRef, useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import type { MigrationProgress, MigrationConfig } from "@/types/migration";
-import { Play, Loader2, Copy, CheckCircle2 } from "lucide-react";
+import type { MigrationProgress, ScanSummary } from "@/types/migration";
+import { Play, Loader2, Copy, CheckCircle2, Search, Files, Folder, HardDrive, Clock } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface Props {
   progress: MigrationProgress;
-  migrationConfig: MigrationConfig;
+  scan: ScanSummary;
+  onScan: () => void;
   onStart: () => void;
   onNext: () => void;
   onBack: () => void;
+  loading: { scanning: boolean; startingMigration: boolean };
 }
 
 const statusColors: Record<string, string> = {
@@ -22,7 +24,7 @@ const statusColors: Record<string, string> = {
   failed: "bg-destructive/10 text-destructive",
 };
 
-const ExecutionStep = ({ progress, migrationConfig, onStart, onNext, onBack }: Props) => {
+const ExecutionStep = ({ progress, scan, onScan, onStart, onNext, onBack, loading }: Props) => {
   const [copied, setCopied] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
 
@@ -30,8 +32,10 @@ const ExecutionStep = ({ progress, migrationConfig, onStart, onNext, onBack }: P
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [progress.logs]);
 
-  const total = progress.filesMigrated + progress.failedFiles;
-  const pct = progress.totalUsers > 0 ? Math.round((total / (progress.totalUsers * 10)) * 100) : 0;
+  const totalUnits = scan.totalFiles || progress.totalUsers * 10;
+  const pct = totalUnits > 0
+    ? Math.min(100, Math.round(((progress.filesMigrated + progress.failedFiles) / totalUnits) * 100))
+    : 0;
 
   const copyId = () => {
     navigator.clipboard.writeText(progress.migrationId);
@@ -45,11 +49,34 @@ const ExecutionStep = ({ progress, migrationConfig, onStart, onNext, onBack }: P
   return (
     <div className="max-w-3xl mx-auto space-y-4">
       <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2"><Search className="w-5 h-5 text-primary" /> Pre-migration scan</CardTitle>
+          <CardDescription>List all mapped files and folders, total size and an estimated runtime before starting.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Button onClick={onScan} disabled={loading.scanning || isRunning} className="w-full" variant={scan.scanned ? "outline" : "default"}>
+            {loading.scanning ? (
+              <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Scanning…</>
+            ) : scan.scanned ? (
+              "Re-run scan"
+            ) : (
+              <>List & estimate (read-only)</>
+            )}
+          </Button>
+
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <Stat icon={<Files className="w-4 h-4" />} label="Total files" value={scan.totalFiles.toLocaleString()} />
+            <Stat icon={<Folder className="w-4 h-4" />} label="Total folders" value={scan.totalFolders.toLocaleString()} />
+            <Stat icon={<HardDrive className="w-4 h-4" />} label="Total size" value={`${scan.totalSizeGb.toFixed(2)} GB`} />
+            <Stat icon={<Clock className="w-4 h-4" />} label="Estimated time" value={`${scan.estimateDays}d ${scan.estimateHours}h`} />
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
         <CardHeader className="flex-row items-center justify-between">
           <CardTitle>Migration Execution</CardTitle>
-          <Badge className={cn("capitalize", statusColors[progress.status])}>
-            {progress.status}
-          </Badge>
+          <Badge className={cn("capitalize", statusColors[progress.status])}>{progress.status}</Badge>
         </CardHeader>
         <CardContent className="space-y-6">
           {progress.migrationId && (
@@ -62,21 +89,20 @@ const ExecutionStep = ({ progress, migrationConfig, onStart, onNext, onBack }: P
             </div>
           )}
 
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-3 gap-4">
             {[
               { label: "Total Users", value: progress.totalUsers },
               { label: "Files Migrated", value: progress.filesMigrated },
               { label: "Failed Files", value: progress.failedFiles },
-              { label: "Mode", value: migrationConfig.mode },
             ].map((s) => (
               <div key={s.label} className="text-center p-3 bg-muted/50 rounded-lg">
-                <p className="text-2xl font-bold">{s.value}</p>
+                <p className="text-2xl font-bold">{s.value.toLocaleString()}</p>
                 <p className="text-xs text-muted-foreground">{s.label}</p>
               </div>
             ))}
           </div>
 
-          {isRunning && (
+          {(isRunning || isDone) && (
             <div className="space-y-1.5">
               <Progress value={pct} className="h-2" />
               <p className="text-xs text-muted-foreground text-right">{pct}%</p>
@@ -92,13 +118,23 @@ const ExecutionStep = ({ progress, migrationConfig, onStart, onNext, onBack }: P
           )}
 
           {progress.status === "pending" && (
-            <Button onClick={onStart} className="w-full" size="lg">
-              <Play className="w-4 h-4 mr-2" /> Start Migration
+            <Button
+              onClick={onStart}
+              className="w-full"
+              size="lg"
+              disabled={!scan.scanned || loading.startingMigration}
+              title={!scan.scanned ? "Run a scan first" : ""}
+            >
+              {loading.startingMigration ? (
+                <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Starting…</>
+              ) : (
+                <><Play className="w-4 h-4 mr-2" /> Start Migration</>
+              )}
             </Button>
           )}
           {isRunning && (
             <Button disabled className="w-full" size="lg">
-              <Loader2 className="w-4 h-4 mr-2 animate-spin" /> Migration in Progress...
+              <Loader2 className="w-4 h-4 mr-2 animate-spin" /> Migration in Progress…
             </Button>
           )}
 
@@ -111,5 +147,12 @@ const ExecutionStep = ({ progress, migrationConfig, onStart, onNext, onBack }: P
     </div>
   );
 };
+
+const Stat = ({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) => (
+  <div className="rounded-lg border bg-card p-3">
+    <div className="flex items-center gap-1.5 text-muted-foreground text-xs mb-1.5">{icon}<span>{label}</span></div>
+    <p className="text-lg font-semibold tabular-nums">{value}</p>
+  </div>
+);
 
 export default ExecutionStep;

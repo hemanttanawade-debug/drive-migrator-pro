@@ -5,11 +5,36 @@ import { Toaster as Sonner } from "@/components/ui/sonner";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
-import Index from "./pages/Index";
 import LoginPage from "./pages/LoginPage";
 import NotFound from "./pages/NotFound";
+import AppShell from "./components/layout/AppShell";
+import MigrationWizard from "./components/migration/MigrationWizard";
+import Dashboard from "./pages/Dashboard";
+import LogScreen from "./pages/LogScreen";
+import Settings from "./pages/Settings";
+import { useMigrationWizard } from "./components/migration/useMigrationWizard";
+import { MigrationProvider } from "./components/migration/MigrationContext";
 
 const queryClient = new QueryClient();
+
+const ProtectedRoutes = () => {
+  // Single shared wizard instance so Project, Dashboard, Logs and Settings see the same state.
+  const wizard = useMigrationWizard();
+
+  return (
+    <MigrationProvider value={wizard}>
+      <Routes>
+        <Route element={<AppShell />}>
+          <Route path="/" element={<MigrationWizard />} />
+          <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/logs" element={<LogScreen />} />
+          <Route path="/settings" element={<Settings />} />
+          <Route path="*" element={<NotFound />} />
+        </Route>
+      </Routes>
+    </MigrationProvider>
+  );
+};
 
 const AppRoutes = () => {
   const { user, isLoading } = useAuth();
@@ -23,13 +48,7 @@ const AppRoutes = () => {
   }
 
   if (!user) return <LoginPage />;
-
-  return (
-    <Routes>
-      <Route path="/" element={<Index />} />
-      <Route path="*" element={<NotFound />} />
-    </Routes>
-  );
+  return <ProtectedRoutes />;
 };
 
 const App = () => (

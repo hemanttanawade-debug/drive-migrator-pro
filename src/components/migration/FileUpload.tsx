@@ -7,19 +7,21 @@ interface FileUploadProps {
   label: string;
   file: File | null;
   onFileChange: (file: File | null) => void;
+  disabled?: boolean;
 }
 
-const FileUpload = ({ accept, label, file, onFileChange }: FileUploadProps) => {
+const FileUpload = ({ accept, label, file, onFileChange, disabled }: FileUploadProps) => {
   const [dragOver, setDragOver] = useState(false);
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
       setDragOver(false);
+      if (disabled) return;
       const f = e.dataTransfer.files[0];
       if (f) onFileChange(f);
     },
-    [onFileChange]
+    [disabled, onFileChange]
   );
 
   return (
@@ -29,20 +31,24 @@ const FileUpload = ({ accept, label, file, onFileChange }: FileUploadProps) => {
         <div className="flex items-center gap-3 p-3 rounded-lg bg-muted border border-border">
           <FileText className="w-5 h-5 text-primary" />
           <span className="text-sm flex-1 truncate">{file.name}</span>
-          <button onClick={() => onFileChange(null)} className="text-muted-foreground hover:text-destructive transition-colors">
-            <X className="w-4 h-4" />
-          </button>
+          {!disabled && (
+            <button onClick={() => onFileChange(null)} className="text-muted-foreground hover:text-destructive transition-colors">
+              <X className="w-4 h-4" />
+            </button>
+          )}
         </div>
       ) : (
         <div
-          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+          onDragOver={(e) => { if (!disabled) { e.preventDefault(); setDragOver(true); } }}
           onDragLeave={() => setDragOver(false)}
           onDrop={handleDrop}
           className={cn(
-            "border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-colors",
-            dragOver ? "border-primary bg-primary/5" : "border-border hover:border-primary/50"
+            "border-2 border-dashed rounded-lg p-6 text-center transition-colors",
+            disabled ? "opacity-50 cursor-not-allowed border-border" : "cursor-pointer",
+            !disabled && (dragOver ? "border-primary bg-primary/5" : "border-border hover:border-primary/50")
           )}
           onClick={() => {
+            if (disabled) return;
             const input = document.createElement("input");
             input.type = "file";
             input.accept = accept;
