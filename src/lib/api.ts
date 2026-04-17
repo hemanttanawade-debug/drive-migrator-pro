@@ -1,14 +1,21 @@
 /**
  * Authenticated API integration layer.
  *
- * Reads the Google ID token from sessionStorage and attaches it as a
- * Bearer token on every request. On expiry or 401, forces re-login.
+ * Every helper attaches the Google ID token from sessionStorage as a Bearer
+ * token. On expiry or 401, the user is forced to re-authenticate.
  *
- * BASE_URL points at the Flask backend root (no trailing /api suffix needed
- * here — each function path already includes /api/...).
+ * NOTE: Endpoints marked "(assumed)" do not yet exist in the Flask backend.
+ * They follow the conventions of the existing routes and are documented in
+ * docs/flask-endpoints.md so the backend team can implement them.
  */
 
 import { buildApiUrl } from "@/lib/backend";
+import type {
+  DashboardSummary,
+  ScanSummary,
+  SharedDriveMappingRow,
+  UserMappingRow,
+} from "@/types/migration";
 
 // ─── Auth token helper ────────────────────────────────────────────────────────
 
@@ -27,30 +34,23 @@ function getStoredToken(): string | null {
 function forceRelogin(): never {
   sessionStorage.removeItem("gws_user");
   window.location.reload();
-  // reload() is synchronous in the browser but TS doesn't know that,
-  // so we throw to satisfy the `never` return type and stop execution.
   throw new Error("Session expired — reloading");
 }
 
 // ─── Core fetch wrapper ───────────────────────────────────────────────────────
 
-export async function apiFetch(
-  path: string,
-  options: RequestInit = {}
-): Promise<Response> {
+export async function apiFetch(path: string, options: RequestInit = {}): Promise<Response> {
   const token = getStoredToken();
   if (!token) forceRelogin();
 
   const headers = new Headers(options.headers);
   headers.set("Authorization", `Bearer ${token}`);
 
-  // Let the browser set Content-Type for FormData (needs the boundary param).
   if (!(options.body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
 
   let res: Response;
-
   try {
     res = await fetch(buildApiUrl(path), { ...options, headers });
   } catch {
@@ -64,86 +64,159 @@ export async function apiFetch(
   return res;
 }
 
-// ─── Typed response helper ────────────────────────────────────────────────────
-
 async function parseJSON<T>(res: Response, errorMsg: string): Promise<T> {
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error((body as any).error || errorMsg);
+    throw new Error((body as any).error || (body as any).message || errorMsg);
   }
   return res.json() as Promise<T>;
 }
 
-// ─── API calls ────────────────────────────────────────────────────────────────
+// ─── Session ──────────────────────────────────────────────────────────────────
 
-export async function createMigrationSession(): Promise<{
-  sessionId: string;
-  message: string;
-}> {
+export async function createMigrationSession() {
   const res = await apiFetch("/api/config/new", { method: "POST" });
-  return parseJSON(res, "Failed to start a new migration session");
+  return parseJSON<{ sessionId: string; message: string }>(res, "Failed to start a new session");
 }
 
-export async function saveConfig(
-  formData: FormData
-): Promise<{ success: boolean; message: string; sessionId: string }> {
+// ─── Step 1: domain config ────────────────────────────────────────────────────
+
+export async function saveConfig(formData: FormData) {
   const res = await apiFetch("/api/config", { method: "POST", body: formData });
-  return parseJSON(res, "Failed to save configuration");
+  return parseJSON<{ success: boolean; message: string; sessionId: string }>(
+    res,
+    "Failed to save configuration"
+  );
 }
 
-export async function uploadUserMapping(
-  file: File,
-  sessionId?: string
-): Promise<{ mappings: { sourceUser: string; destinationUser: string }[] }> {
-  const formData = new FormData();
-  formData.append("file", file);
-  if (sessionId) formData.append("sessionId", sessionId);
-  const res = await apiFetch("/api/user-mapping", { method: "POST", body: formData });
-  return parseJSON(res, "Failed to upload user mapping");
-}
+// ─── Step 2: validation ───────────────────────────────────────────────────────
 
-export async function validateConnection(sessionId?: string): Promise<{
-  source: boolean;
-  destination: boolean;
-  errors?: string[];
-}> {
+export async function validateConnection(sessionId?: string) {
   const res = await apiFetch("/api/validate", {
     method: "POST",
     body: JSON.stringify(sessionId ? { sessionId } : {}),
   });
-  return parseJSON(res, "Failed to validate connection");
+  const data = await parseJSON<{
+    source: boolean;
+    destination: boolean;
+    errors?: string[];
+    checks?: Partial<Record<
+      "service_account" | "domain_delegation" | "cloud_sql" | "gcs_bucket",
+      { ok: boolean; error?: string }
+    >>;
+  }>(res, "Failed to validate connection");
+
+  return data;
 }
 
-export async function saveMigrationMode(
-  mode: string,
+// ─── Step 3: user mapping (My Drive) ──────────────────────────────────────────
+
+export async function uploadUserMapping(file: File, sessionId?: string) {
+  const fd = new FormData();
+  fd.append("file", file);
+  if (sessionId) fd.append("sessionId", sessionId);
+  const res = await apiFetch("/api/user-mapping", { method: "POST", body: fd });
+  return parseJSON<{ mappings: { sourceUser: string; destinationUser: string }[] }>(
+    res,
+    "Failed to upload user mapping"
+  );
+}
+
+/** (assumed) POST /api/shared-drive-mapping — uploads shared_drives.csv */
+export async function uploadSharedDriveMapping(file: File, sessionId?: string) {
+  const fd = new FormData();
+  fd.append("file", file);
+  if (sessionId) fd.append("sessionId", sessionId);
+  const res = await apiFetch("/api/shared-drive-mapping", { method: "POST", body: fd });
+  return parseJSON<{
+    mappings: { sourceDriveId: string; destinationDriveId: string }[];
+  }>(res, "Failed to upload shared drive mapping");
+}
+
+/**
+ * (assumed) POST /api/storage-sizes — returns Drive storage usage per user
+ * via the Admin SDK on the backend.
+ *
+ * Body: { sessionId, users: ["a@x.com", ...], side: "source" | "destination" }
+ * Resp: { sizes: { "a@x.com": 12.4, ... } }
+ */
+export async function fetchStorageSizes(
+  side: "source" | "destination",
+  users: string[],
   sessionId?: string
-): Promise<{ success: boolean; mode: string; message: string }> {
+): Promise<Record<string, number>> {
+  const res = await apiFetch("/api/storage-sizes", {
+    method: "POST",
+    body: JSON.stringify({ side, users, ...(sessionId ? { sessionId } : {}) }),
+  });
+  const data = await parseJSON<{ sizes?: Record<string, number> }>(
+    res,
+    "Failed to fetch storage sizes"
+  );
+  return data.sizes ?? {};
+}
+
+// ─── Step 4: migration mode ───────────────────────────────────────────────────
+
+export async function saveMigrationMode(mode: string, sessionId?: string) {
   const res = await apiFetch("/api/migration-mode", {
     method: "POST",
     body: JSON.stringify({ mode, ...(sessionId ? { sessionId } : {}) }),
   });
-  return parseJSON(res, "Failed to save migration mode");
+  return parseJSON<{ success: boolean; mode: string; message: string }>(
+    res,
+    "Failed to save migration mode"
+  );
 }
+
+// ─── Step 5: scan ─────────────────────────────────────────────────────────────
+
+/**
+ * (assumed) POST /api/scan — walks all mapped users/drives and returns
+ * pre-migration totals. Persists to SQL on the backend.
+ */
+export async function runScan(sessionId?: string): Promise<ScanSummary> {
+  const res = await apiFetch("/api/scan", {
+    method: "POST",
+    body: JSON.stringify(sessionId ? { sessionId } : {}),
+  });
+  const data = await parseJSON<{
+    totalFiles?: number;
+    totalFolders?: number;
+    totalSizeGb?: number;
+    estimateDays?: number;
+    estimateHours?: number;
+    total_files?: number;
+    total_folders?: number;
+    total_size_gb?: number;
+    estimate_days?: number;
+    estimate_hours?: number;
+  }>(res, "Failed to scan source drives");
+
+  return {
+    totalFiles: data.totalFiles ?? data.total_files ?? 0,
+    totalFolders: data.totalFolders ?? data.total_folders ?? 0,
+    totalSizeGb: data.totalSizeGb ?? data.total_size_gb ?? 0,
+    estimateDays: data.estimateDays ?? data.estimate_days ?? 0,
+    estimateHours: data.estimateHours ?? data.estimate_hours ?? 0,
+    scanned: true,
+  };
+}
+
+// ─── Migration execution ──────────────────────────────────────────────────────
 
 export async function startMigration(
   mode: string,
   opts?: { migrationId?: string; sessionId?: string }
-): Promise<{ migrationId: string }> {
+) {
   const res = await apiFetch("/api/migrate", {
     method: "POST",
     body: JSON.stringify({ mode, ...opts }),
   });
-  return parseJSON(res, "Failed to start migration");
+  return parseJSON<{ migrationId: string }>(res, "Failed to start migration");
 }
 
-export async function getMigrationStatus(migrationId: string): Promise<{
-  migrationId?: string;
-  status: string;
-  totalUsers: number;
-  filesMigrated: number;
-  failedFiles: number;
-  logs: string[];
-}> {
+export async function getMigrationStatus(migrationId: string) {
   const res = await apiFetch(`/api/migration/${migrationId}/status`);
   const data = await parseJSON<{
     migrationId?: string;
@@ -168,24 +241,92 @@ export async function getMigrationStatus(migrationId: string): Promise<{
   };
 }
 
-export async function getMigrationLogs(
-  migrationId: string
-): Promise<{ logs: string[] }> {
+export async function getMigrationLogs(migrationId: string) {
   const res = await apiFetch(`/api/migration/${migrationId}/logs`);
-  return parseJSON(res, "Failed to get migration logs");
+  return parseJSON<{ logs: string[] }>(res, "Failed to get migration logs");
 }
 
 export async function downloadReport(migrationId: string): Promise<Blob> {
-  const res = await apiFetch(`/api/migration/${migrationId}/report`);
+  // (assumed) supports ?format=csv via Accept negotiation
+  const res = await apiFetch(`/api/migration/${migrationId}/report?format=csv`);
   if (!res.ok) throw new Error("Failed to download report");
   return res.blob();
 }
 
-export async function retryFailed(
-  migrationId: string
-): Promise<{ success: boolean }> {
-  const res = await apiFetch(`/api/migration/${migrationId}/retry`, {
-    method: "POST",
-  });
-  return parseJSON(res, "Failed to retry failed files");
+export async function downloadLogs(migrationId: string): Promise<Blob> {
+  const res = await apiFetch(`/api/migration/${migrationId}/logs/download`);
+  if (!res.ok) throw new Error("Failed to download logs");
+  return res.blob();
+}
+
+export async function retryFailed(migrationId: string) {
+  const res = await apiFetch(`/api/migration/${migrationId}/retry`, { method: "POST" });
+  return parseJSON<{ success: boolean }>(res, "Failed to retry failed files");
+}
+
+// ─── Dashboard (assumed) ──────────────────────────────────────────────────────
+
+/** GET /api/dashboard?migrationId=<id?> — current migration aggregates + per-user rows */
+export async function getDashboard(migrationId?: string): Promise<DashboardSummary> {
+  const path = migrationId
+    ? `/api/dashboard?migrationId=${encodeURIComponent(migrationId)}`
+    : "/api/dashboard";
+  const res = await apiFetch(path);
+  if (!res.ok) {
+    // Empty fallback so the dashboard renders before backend is wired.
+    return {
+      totalUsers: 0,
+      completed: 0,
+      inProgress: 0,
+      failed: 0,
+      filesMigrated: 0,
+      filesTotal: 0,
+      dataTransferredGb: 0,
+      dataTotalGb: 0,
+      rows: [],
+    };
+  }
+  const data: any = await res.json();
+
+  const rows = (data.rows ?? []).map((r: any) => ({
+    sourceUser: r.sourceUser ?? r.source_user ?? "",
+    destinationUser: r.destinationUser ?? r.destination_user ?? "",
+    status: (r.status ?? "pending") as DashboardSummary["rows"][number]["status"],
+    progressPct: r.progressPct ?? r.progress_pct ?? 0,
+    filesDone: r.filesDone ?? r.files_done ?? 0,
+    filesTotal: r.filesTotal ?? r.files_total ?? 0,
+    filesFailed: r.filesFailed ?? r.files_failed ?? 0,
+    sizeDoneGb: r.sizeDoneGb ?? r.size_done_gb ?? 0,
+    sizeTotalGb: r.sizeTotalGb ?? r.size_total_gb ?? 0,
+  }));
+
+  return {
+    totalUsers: data.totalUsers ?? data.total_users ?? rows.length,
+    completed: data.completed ?? 0,
+    inProgress: data.inProgress ?? data.in_progress ?? 0,
+    failed: data.failed ?? 0,
+    filesMigrated: data.filesMigrated ?? data.files_migrated ?? 0,
+    filesTotal: data.filesTotal ?? data.files_total ?? 0,
+    dataTransferredGb: data.dataTransferredGb ?? data.data_transferred_gb ?? 0,
+    dataTotalGb: data.dataTotalGb ?? data.data_total_gb ?? 0,
+    rows,
+  };
+}
+
+// ─── Settings: purge a completed migration ────────────────────────────────────
+
+/**
+ * DELETE /api/migration/<id>/purge — (assumed) deletes EVERYTHING for the
+ * migration: uploaded files, SQL state, GCS objects, logs, reports.
+ * Falls back to existing /cleanup if /purge is not yet implemented.
+ */
+export async function purgeMigration(migrationId: string) {
+  let res = await apiFetch(`/api/migration/${migrationId}/purge`, { method: "DELETE" });
+  if (res.status === 404) {
+    res = await apiFetch(`/api/migration/${migrationId}/cleanup`, { method: "DELETE" });
+  }
+  return parseJSON<{ success: boolean; deleted?: string[]; message?: string }>(
+    res,
+    "Failed to delete migration data"
+  );
 }
