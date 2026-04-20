@@ -81,8 +81,8 @@ export async function createMigrationSession() {
 
 // ─── Step 1: domain config ────────────────────────────────────────────────────
 
-export async function saveConfig(formData: FormData) {
-  const res = await apiFetch("/api/config", { method: "POST", body: formData });
+export async function saveConfig(formData: FormData, method: "POST" | "PUT" = "POST") {
+  const res = await apiFetch("/api/config", { method, body: formData });
   return parseJSON<{ success: boolean; message: string; sessionId: string }>(
     res,
     "Failed to save configuration"
