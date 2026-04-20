@@ -123,6 +123,16 @@ export const useMigrationWizard = () => {
   });
   const { toast } = useToast();
   const completionNoticeRef = useRef<string | null>(null);
+  // Tracks which credential files were freshly selected (not restored from state).
+  // Only fresh files get appended to FormData — prevents ERR_UPLOAD_FILE_CHANGED
+  // when re-submitting after the browser has invalidated the original File handle.
+  const freshCredsRef = useRef<{ source: boolean; destination: boolean }>({
+    source: false,
+    destination: false,
+  });
+  // True once /api/config has been saved successfully — switches subsequent
+  // saves to PUT so credential files become optional on the backend.
+  const configSavedRef = useRef(false);
 
   const setLoading = useCallback(
     (key: keyof typeof loadingStates, value: boolean) =>
