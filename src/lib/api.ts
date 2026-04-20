@@ -109,6 +109,42 @@ export async function validateConnection(sessionId?: string) {
   return data;
 }
 
+// ─── Pre-flight readiness checks ──────────────────────────────────────────────
+
+export type PreflightCheckKey =
+  | "service_account"
+  | "domain_delegation"
+  | "cloud_sql"
+  | "gcs_bucket";
+
+export interface PreflightCheckResult {
+  ok: boolean;
+  message: string;
+  detail: string;
+}
+
+export interface PreflightResult {
+  overall: boolean;
+  checks: Record<PreflightCheckKey, PreflightCheckResult>;
+}
+
+/**
+ * POST /api/preflight — runs all 4 enterprise readiness checks:
+ *   1. service_account   — both credential JSONs load and are valid service accounts
+ *   2. domain_delegation — admin email can impersonate users on both domains
+ *   3. cloud_sql         — backend can read/write checkpoint state to Cloud SQL
+ *   4. gcs_bucket        — backend can read/write files to the staging GCS bucket
+ *
+ * All 4 checks run independently — one failure never skips the others.
+ */
+export async function runPreflight(sessionId?: string): Promise<PreflightResult> {
+  const res = await apiFetch("/api/preflight", {
+    method: "POST",
+    body: JSON.stringify(sessionId ? { sessionId } : {}),
+  });
+  return parseJSON<PreflightResult>(res, "Pre-flight checks failed");
+}
+
 // ─── Step 3: user mapping (My Drive) ──────────────────────────────────────────
 
 export async function uploadUserMapping(file: File, sessionId?: string) {
