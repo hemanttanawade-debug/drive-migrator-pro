@@ -123,6 +123,16 @@ export const useMigrationWizard = () => {
   });
   const { toast } = useToast();
   const completionNoticeRef = useRef<string | null>(null);
+  // Tracks which credential files were freshly selected (not restored from state).
+  // Only fresh files get appended to FormData — prevents ERR_UPLOAD_FILE_CHANGED
+  // when re-submitting after the browser has invalidated the original File handle.
+  const freshCredsRef = useRef<{ source: boolean; destination: boolean }>({
+    source: false,
+    destination: false,
+  });
+  // True once /api/config has been saved successfully — switches subsequent
+  // saves to PUT so credential files become optional on the backend.
+  const configSavedRef = useRef(false);
 
   const setLoading = useCallback(
     (key: keyof typeof loadingStates, value: boolean) =>
@@ -179,7 +189,19 @@ export const useMigrationWizard = () => {
   const updateDomainConfig = useCallback(
     (config: DomainConfig) => {
       if (!guardEdits()) return;
-      setState((c) => ({ ...invalidateFromStep(0)(c), domainConfig: config }));
+      setState((c) => {
+        // Detect which credential files are NEW File instances vs unchanged refs.
+        if (config.sourceCredentials && config.sourceCredentials !== c.domainConfig.sourceCredentials) {
+          freshCredsRef.current.source = true;
+        }
+        if (
+          config.destinationCredentials &&
+          config.destinationCredentials !== c.domainConfig.destinationCredentials
+        ) {
+          freshCredsRef.current.destination = true;
+        }
+        return { ...invalidateFromStep(0)(c), domainConfig: config };
+      });
     },
     [guardEdits, invalidateFromStep]
   );
@@ -260,10 +282,25 @@ export const useMigrationWizard = () => {
       fd.append("sourceAdminEmail", state.domainConfig.sourceAdminEmail.trim());
       fd.append("destinationDomain", state.domainConfig.destinationDomain.trim());
       fd.append("destinationAdminEmail", state.domainConfig.destinationAdminEmail.trim());
-      if (state.domainConfig.sourceCredentials) fd.append("sourceCredentials", state.domainConfig.sourceCredentials);
-      if (state.domainConfig.destinationCredentials) fd.append("destinationCredentials", state.domainConfig.destinationCredentials);
 
-      const res = await saveConfig(fd);
+      // Only send credential files that were freshly selected by the user
+      // in this browser session. Re-uploading a stale File handle triggers
+      // the browser's ERR_UPLOAD_FILE_CHANGED error.
+      if (state.domainConfig.sourceCredentials && freshCredsRef.current.source) {
+        fd.append("sourceCredentials", state.domainConfig.sourceCredentials);
+      }
+      if (state.domainConfig.destinationCredentials && freshCredsRef.current.destination) {
+        fd.append("destinationCredentials", state.domainConfig.destinationCredentials);
+      }
+
+      // First save → POST (creates files on backend).
+      // Subsequent saves → PUT (credential files optional, kept if not sent).
+      const method = configSavedRef.current ? "PUT" : "POST";
+      const res = await saveConfig(fd, method);
+
+      configSavedRef.current = true;
+      freshCredsRef.current = { source: false, destination: false };
+
       setState((c) => ({
         ...c,
         sessionId: res.sessionId,
