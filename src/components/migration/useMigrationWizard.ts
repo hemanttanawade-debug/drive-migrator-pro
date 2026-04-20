@@ -189,7 +189,19 @@ export const useMigrationWizard = () => {
   const updateDomainConfig = useCallback(
     (config: DomainConfig) => {
       if (!guardEdits()) return;
-      setState((c) => ({ ...invalidateFromStep(0)(c), domainConfig: config }));
+      setState((c) => {
+        // Detect which credential files are NEW File instances vs unchanged refs.
+        if (config.sourceCredentials && config.sourceCredentials !== c.domainConfig.sourceCredentials) {
+          freshCredsRef.current.source = true;
+        }
+        if (
+          config.destinationCredentials &&
+          config.destinationCredentials !== c.domainConfig.destinationCredentials
+        ) {
+          freshCredsRef.current.destination = true;
+        }
+        return { ...invalidateFromStep(0)(c), domainConfig: config };
+      });
     },
     [guardEdits, invalidateFromStep]
   );
