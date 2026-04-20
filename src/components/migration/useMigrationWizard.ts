@@ -282,10 +282,25 @@ export const useMigrationWizard = () => {
       fd.append("sourceAdminEmail", state.domainConfig.sourceAdminEmail.trim());
       fd.append("destinationDomain", state.domainConfig.destinationDomain.trim());
       fd.append("destinationAdminEmail", state.domainConfig.destinationAdminEmail.trim());
-      if (state.domainConfig.sourceCredentials) fd.append("sourceCredentials", state.domainConfig.sourceCredentials);
-      if (state.domainConfig.destinationCredentials) fd.append("destinationCredentials", state.domainConfig.destinationCredentials);
 
-      const res = await saveConfig(fd);
+      // Only send credential files that were freshly selected by the user
+      // in this browser session. Re-uploading a stale File handle triggers
+      // the browser's ERR_UPLOAD_FILE_CHANGED error.
+      if (state.domainConfig.sourceCredentials && freshCredsRef.current.source) {
+        fd.append("sourceCredentials", state.domainConfig.sourceCredentials);
+      }
+      if (state.domainConfig.destinationCredentials && freshCredsRef.current.destination) {
+        fd.append("destinationCredentials", state.domainConfig.destinationCredentials);
+      }
+
+      // First save → POST (creates files on backend).
+      // Subsequent saves → PUT (credential files optional, kept if not sent).
+      const method = configSavedRef.current ? "PUT" : "POST";
+      const res = await saveConfig(fd, method);
+
+      configSavedRef.current = true;
+      freshCredsRef.current = { source: false, destination: false };
+
       setState((c) => ({
         ...c,
         sessionId: res.sessionId,
