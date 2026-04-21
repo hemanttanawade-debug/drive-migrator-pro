@@ -29,7 +29,7 @@ import type {
 import { normalizeUserMappingFile } from "./user-mapping-utils";
 import { normalizeSharedDriveFile } from "./shared-drive-mapping-utils";
 
-const TOTAL_STEPS = 6;
+const TOTAL_STEPS = 5;
 
 const createInitialChecks = (): ValidationCheck[] => [
   { key: "serviceAccount", label: "Service account credentials", description: "Both source and destination service account JSONs load and authenticate", status: "pending" },
