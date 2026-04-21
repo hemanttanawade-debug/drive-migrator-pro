@@ -12,6 +12,7 @@ import {
   uploadSharedDriveMapping,
   uploadUserMapping,
   validateConnection,
+  runPreflight,
 } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import type {
@@ -331,7 +332,9 @@ export const useMigrationWizard = () => {
 
     try {
       const sessionId = await ensureSession();
-      const res = await validateConnection(sessionId);
+      // Use /api/preflight — the real 4-check endpoint (service account,
+      // domain delegation, Cloud SQL, GCS bucket). /api/validate only covers 2.
+      const res = await runPreflight(sessionId);
 
       const checkMap: Record<string, "service_account" | "domain_delegation" | "cloud_sql" | "gcs_bucket"> = {
         serviceAccount: "service_account",
@@ -340,27 +343,26 @@ export const useMigrationWizard = () => {
         gcsBucket: "gcs_bucket",
       };
 
-      const isAuthOk = res.source && res.destination;
       const checks: ValidationCheck[] = createInitialChecks().map((chk) => {
         const backend = res.checks?.[checkMap[chk.key]];
-        if (backend) {
-          return { ...chk, status: backend.ok ? "success" : "error", error: backend.error };
-        }
-        // Fallback inference when backend doesn't return granular checks yet.
-        if (chk.key === "serviceAccount" || chk.key === "domainDelegation") {
-          return { ...chk, status: isAuthOk ? "success" : "error" };
-        }
-        return { ...chk, status: isAuthOk ? "success" : "pending" };
+        if (!backend) return { ...chk, status: "error", error: "No result returned" };
+        return {
+          ...chk,
+          status: backend.ok ? "success" : "error",
+          error: backend.ok ? undefined : (backend.message || backend.detail),
+        };
       });
 
-      const allPassed = checks.every((chk) => chk.status === "success");
+      const allPassed = res.overall && checks.every((chk) => chk.status === "success");
+      const sourceOk = !!(res.checks?.service_account?.ok && res.checks?.domain_delegation?.ok);
 
       setState((c) => ({
         ...c,
         connectionStatus: {
-          source: res.source ? "success" : "error",
-          destination: res.destination ? "success" : "error",
-          ...parseValidationErrors(res.errors),
+          source: sourceOk ? "success" : "error",
+          destination: sourceOk ? "success" : "error",
+          sourceError: res.checks?.service_account?.ok ? undefined : res.checks?.service_account?.message,
+          destinationError: res.checks?.domain_delegation?.ok ? undefined : res.checks?.domain_delegation?.message,
           checks,
         },
         completedSteps: allPassed
@@ -369,10 +371,10 @@ export const useMigrationWizard = () => {
       }));
 
       toast({
-        title: allPassed ? "All checks passed" : "Validation failed",
+        title: allPassed ? "All 4 checks passed" : "Pre-flight failed",
         description: allPassed
           ? "Service account, delegation, Cloud SQL and GCS bucket are reachable."
-          : res.errors?.[0] || "Review failed checks below.",
+          : checks.find((c) => c.status === "error")?.error || "Review failed checks below.",
         variant: allPassed ? "default" : "destructive",
       });
     } catch (e) {
