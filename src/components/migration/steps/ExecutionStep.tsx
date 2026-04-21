@@ -4,16 +4,19 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import type { MigrationProgress, ScanSummary } from "@/types/migration";
-import { Play, Loader2, Copy, CheckCircle2, Search, Files, Folder, HardDrive, Clock } from "lucide-react";
+import { Play, Loader2, Copy, CheckCircle2, Search, Files, Folder, HardDrive, Clock, Download, RotateCcw, FileText } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { downloadLogs } from "@/lib/api";
+import { useToast } from "@/hooks/use-toast";
 
 interface Props {
   progress: MigrationProgress;
   scan: ScanSummary;
   onScan: () => void;
   onStart: () => void;
-  onNext: () => void;
   onBack: () => void;
+  onDownloadReport: () => void;
+  onRetry: () => void;
   loading: { scanning: boolean; startingMigration: boolean };
 }
 
@@ -24,9 +27,10 @@ const statusColors: Record<string, string> = {
   failed: "bg-destructive/10 text-destructive",
 };
 
-const ExecutionStep = ({ progress, scan, onScan, onStart, onNext, onBack, loading }: Props) => {
+const ExecutionStep = ({ progress, scan, onScan, onStart, onBack, onDownloadReport, onRetry, loading }: Props) => {
   const [copied, setCopied] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
+  const { toast } = useToast();
 
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
@@ -45,6 +49,20 @@ const ExecutionStep = ({ progress, scan, onScan, onStart, onNext, onBack, loadin
 
   const isRunning = progress.status === "running";
   const isDone = progress.status === "completed" || progress.status === "failed";
+
+  const handleLogs = async () => {
+    try {
+      const blob = await downloadLogs(progress.migrationId);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `migration-${progress.migrationId}.log`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      toast({ title: "Could not download logs", description: e instanceof Error ? e.message : "", variant: "destructive" });
+    }
+  };
 
   return (
     <div className="max-w-3xl mx-auto space-y-4">
@@ -140,10 +158,35 @@ const ExecutionStep = ({ progress, scan, onScan, onStart, onNext, onBack, loadin
 
           <div className="flex justify-between">
             <Button variant="outline" onClick={onBack} disabled={isRunning}>Back</Button>
-            <Button onClick={onNext} disabled={!isDone}>View Logs & Reports</Button>
           </div>
         </CardContent>
       </Card>
+
+      {isDone && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <FileText className="w-5 h-5 text-primary" /> Logs & Reports
+            </CardTitle>
+            <CardDescription>Migration ID: {progress.migrationId}</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <Button onClick={onDownloadReport}>
+                <Download className="w-4 h-4 mr-2" /> Download Report (CSV)
+              </Button>
+              <Button variant="outline" onClick={handleLogs}>
+                <Download className="w-4 h-4 mr-2" /> Download Log (TXT)
+              </Button>
+            </div>
+            {progress.failedFiles > 0 && (
+              <Button variant="outline" onClick={onRetry} className="w-full">
+                <RotateCcw className="w-4 h-4 mr-2" /> Retry Failed Files
+              </Button>
+            )}
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 };
