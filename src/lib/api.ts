@@ -100,7 +100,7 @@ export async function validateConnection(sessionId?: string) {
     source: boolean;
     destination: boolean;
     errors?: string[];
-    checks?: Partial<Record
+    checks?: Partial<Record<
       "service_account" | "domain_delegation" | "cloud_sql" | "gcs_bucket",
       { ok: boolean; error?: string }
     >>;
