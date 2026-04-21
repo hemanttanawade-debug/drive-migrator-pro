@@ -407,8 +407,8 @@ export const useMigrationWizard = () => {
         ]);
         return mappings.map((m) => ({
           ...m,
-          sourceSizeGb: sourceSizes[m.sourceUser] ?? null,
-          destinationSizeGb: destSizes[m.destinationUser] ?? null,
+          sourceSizeGb: sourceSizes[m.sourceUser]?.drive_gb ?? null,
+          destinationSizeGb: destSizes[m.destinationUser]?.drive_gb ?? null,
         }));
       } finally {
         setLoading("fetchingSizes", false);
