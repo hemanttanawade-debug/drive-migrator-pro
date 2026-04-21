@@ -100,7 +100,7 @@ export async function validateConnection(sessionId?: string) {
     source: boolean;
     destination: boolean;
     errors?: string[];
-    checks?: Partial<Record<
+    checks?: Partial<Record
       "service_account" | "domain_delegation" | "cloud_sql" | "gcs_bucket",
       { ok: boolean; error?: string }
     >>;
@@ -169,23 +169,36 @@ export async function uploadSharedDriveMapping(file: File, sessionId?: string) {
   }>(res, "Failed to upload shared drive mapping");
 }
 
+// ─── Storage sizes ────────────────────────────────────────────────────────────
+
 /**
- * (assumed) POST /api/storage-sizes — returns Drive storage usage per user
- * via the Admin SDK on the backend.
+ * Shape returned by the backend for each user.
+ * drive_gb is null when the Reports API has no data yet (24–48 hr lag)
+ * or when the user was not found / permissions are missing.
+ */
+export interface UserStorageInfo {
+  drive_gb: number | null;
+  date: string | null;
+  error: string | null;
+}
+
+/**
+ * POST /api/storage-sizes — returns Drive storage usage per user
+ * via the Admin Reports API on the backend.
  *
  * Body: { sessionId, users: ["a@x.com", ...], side: "source" | "destination" }
- * Resp: { sizes: { "a@x.com": 12.4, ... } }
+ * Resp: { sizes: { "a@x.com": { drive_gb: 1.23, date: "2025-04-19", error: null } } }
  */
 export async function fetchStorageSizes(
   side: "source" | "destination",
   users: string[],
   sessionId?: string
-): Promise<Record<string, number>> {
+): Promise<Record<string, UserStorageInfo>> {
   const res = await apiFetch("/api/storage-sizes", {
     method: "POST",
     body: JSON.stringify({ side, users, ...(sessionId ? { sessionId } : {}) }),
   });
-  const data = await parseJSON<{ sizes?: Record<string, number> }>(
+  const data = await parseJSON<{ sizes?: Record<string, UserStorageInfo> }>(
     res,
     "Failed to fetch storage sizes"
   );
@@ -283,7 +296,6 @@ export async function getMigrationLogs(migrationId: string) {
 }
 
 export async function downloadReport(migrationId: string): Promise<Blob> {
-  // (assumed) supports ?format=csv via Accept negotiation
   const res = await apiFetch(`/api/migration/${migrationId}/report?format=csv`);
   if (!res.ok) throw new Error("Failed to download report");
   return res.blob();
@@ -309,7 +321,6 @@ export async function getDashboard(migrationId?: string): Promise<DashboardSumma
     : "/api/dashboard";
   const res = await apiFetch(path);
   if (!res.ok) {
-    // Empty fallback so the dashboard renders before backend is wired.
     return {
       totalUsers: 0,
       completed: 0,
@@ -325,26 +336,26 @@ export async function getDashboard(migrationId?: string): Promise<DashboardSumma
   const data: any = await res.json();
 
   const rows = (data.rows ?? []).map((r: any) => ({
-    sourceUser: r.sourceUser ?? r.source_user ?? "",
+    sourceUser:      r.sourceUser      ?? r.source_user      ?? "",
     destinationUser: r.destinationUser ?? r.destination_user ?? "",
-    status: (r.status ?? "pending") as DashboardSummary["rows"][number]["status"],
-    progressPct: r.progressPct ?? r.progress_pct ?? 0,
-    filesDone: r.filesDone ?? r.files_done ?? 0,
-    filesTotal: r.filesTotal ?? r.files_total ?? 0,
-    filesFailed: r.filesFailed ?? r.files_failed ?? 0,
-    sizeDoneGb: r.sizeDoneGb ?? r.size_done_gb ?? 0,
-    sizeTotalGb: r.sizeTotalGb ?? r.size_total_gb ?? 0,
+    status:          (r.status ?? "pending") as DashboardSummary["rows"][number]["status"],
+    progressPct:     r.progressPct     ?? r.progress_pct     ?? 0,
+    filesDone:       r.filesDone       ?? r.files_done       ?? 0,
+    filesTotal:      r.filesTotal      ?? r.files_total      ?? 0,
+    filesFailed:     r.filesFailed     ?? r.files_failed     ?? 0,
+    sizeDoneGb:      r.sizeDoneGb      ?? r.size_done_gb     ?? 0,
+    sizeTotalGb:     r.sizeTotalGb     ?? r.size_total_gb    ?? 0,
   }));
 
   return {
-    totalUsers: data.totalUsers ?? data.total_users ?? rows.length,
-    completed: data.completed ?? 0,
-    inProgress: data.inProgress ?? data.in_progress ?? 0,
-    failed: data.failed ?? 0,
-    filesMigrated: data.filesMigrated ?? data.files_migrated ?? 0,
-    filesTotal: data.filesTotal ?? data.files_total ?? 0,
+    totalUsers:        data.totalUsers        ?? data.total_users        ?? rows.length,
+    completed:         data.completed         ?? 0,
+    inProgress:        data.inProgress        ?? data.in_progress        ?? 0,
+    failed:            data.failed            ?? 0,
+    filesMigrated:     data.filesMigrated     ?? data.files_migrated     ?? 0,
+    filesTotal:        data.filesTotal        ?? data.files_total        ?? 0,
     dataTransferredGb: data.dataTransferredGb ?? data.data_transferred_gb ?? 0,
-    dataTotalGb: data.dataTotalGb ?? data.data_total_gb ?? 0,
+    dataTotalGb:       data.dataTotalGb       ?? data.data_total_gb      ?? 0,
     rows,
   };
 }
@@ -352,8 +363,8 @@ export async function getDashboard(migrationId?: string): Promise<DashboardSumma
 // ─── Settings: purge a completed migration ────────────────────────────────────
 
 /**
- * DELETE /api/migration/<id>/purge — (assumed) deletes EVERYTHING for the
- * migration: uploaded files, SQL state, GCS objects, logs, reports.
+ * DELETE /api/migration/<id>/purge — deletes EVERYTHING for the migration:
+ * uploaded files, SQL state, GCS objects, logs, reports.
  * Falls back to existing /cleanup if /purge is not yet implemented.
  */
 export async function purgeMigration(migrationId: string) {
