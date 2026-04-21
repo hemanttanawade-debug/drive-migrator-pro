@@ -4,7 +4,6 @@ import UserMappingStep from "./steps/UserMappingStep";
 import ValidationStep from "./steps/ValidationStep";
 import MigrationModeStep from "./steps/MigrationModeStep";
 import ExecutionStep from "./steps/ExecutionStep";
-import LogsReportsStep from "./steps/LogsReportsStep";
 import { useMigrationContext } from "./MigrationContext";
 
 const MigrationWizard = () => {
@@ -77,20 +76,13 @@ const MigrationWizard = () => {
           scan={w.state.scan}
           onScan={w.runPreScan}
           onStart={w.startMigrationRun}
-          onNext={() => w.goToStep(5)}
           onBack={w.goBack}
+          onDownloadReport={w.downloadMigrationReport}
+          onRetry={w.retryFailedItems}
           loading={{
             scanning: w.loadingStates.scanning,
             startingMigration: w.loadingStates.startingMigration,
           }}
-        />
-      )}
-      {w.state.currentStep === 5 && (
-        <LogsReportsStep
-          progress={w.state.migrationProgress}
-          onDownloadReport={w.downloadMigrationReport}
-          onRetry={w.retryFailedItems}
-          onBack={() => w.goToStep(4)}
         />
       )}
     </div>
