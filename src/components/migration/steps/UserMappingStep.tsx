@@ -146,7 +146,7 @@ const UserMappingStep = ({
       {showUser && (
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2"><Users className="w-5 h-5 text-primary" /> User mapping (My Drive)</CardTitle>
+            <CardTitle className="flex items-center gap-2"><Users className="w-5 h-5 text-primary" /> User mapping</CardTitle>
             <CardDescription>
               CSV with <code className="text-xs bg-muted px-1 py-0.5 rounded">source,destination</code> emails.
             </CardDescription>
