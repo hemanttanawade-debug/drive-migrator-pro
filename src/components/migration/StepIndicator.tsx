@@ -3,11 +3,10 @@ import { cn } from "@/lib/utils";
 
 const steps = [
   "Domain Config",
+  "Validation",
   "User Mapping",
-  "Validate",
   "Migration Mode",
   "Execute",
-  "Logs & Reports",
 ];
 
 interface StepIndicatorProps {
