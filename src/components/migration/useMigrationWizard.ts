@@ -15,6 +15,7 @@ import {
   uploadSharedDriveMapping,
   uploadUserMapping,
   runPreflight,
+  getStreamToken,
 } from "@/lib/api";
 import { buildApiUrl } from "@/lib/backend";
 import { useToast } from "@/hooks/use-toast";
@@ -535,11 +536,19 @@ export const useMigrationWizard = () => {
       await startDiscovery({ runId, userMapping, sessionId });
 
       // Stream progress via SSE; resolve once the 'done' event fires.
-      await new Promise<void>((resolve, reject) => {
-        const url = buildApiUrl(`/api/discovery/stream?run_id=${encodeURIComponent(runId)}`);
-        const es = new EventSource(url, { withCredentials: true });
-        es.addEventListener("done", () => { es.close(); resolve(); });
-        es.addEventListener("error", () => { es.close(); reject(new Error("Discovery stream failed")); });
+      // EventSource cannot send Bearer headers — fetch a short-lived token first.
+      await new Promise<void>(async (resolve, reject) => {
+        try {
+          const streamToken = await getStreamToken("discovery");
+          const url = buildApiUrl(
+            `/api/discovery/stream?run_id=${encodeURIComponent(runId)}&stream_token=${encodeURIComponent(streamToken)}`,
+          );
+          const es = new EventSource(url);
+          es.addEventListener("done", () => { es.close(); resolve(); });
+          es.addEventListener("error", () => { es.close(); reject(new Error("Discovery stream failed")); });
+        } catch (err) {
+          reject(err);
+        }
       }).catch(() => { /* ignore — we'll fall back to summary below */ });
 
       const summary = await getDiscoverySummary(runId);
@@ -605,10 +614,10 @@ export const useMigrationWizard = () => {
   // SSE: per-file events from /api/migration/stream
   useEffect(() => {
     if (state.migrationProgress.status !== "running" || !state.migrationProgress.migrationId) return;
-    const url = buildApiUrl(
-      `/api/migration/stream?run_id=${encodeURIComponent(state.migrationProgress.migrationId)}`,
-    );
-    const es = new EventSource(url, { withCredentials: true });
+
+    let es: EventSource | null = null;
+    let cancelled = false;
+    const runId = state.migrationProgress.migrationId;
 
     const appendLog = (line: string) =>
       setState((c) => ({
@@ -619,33 +628,46 @@ export const useMigrationWizard = () => {
         },
       }));
 
-    es.addEventListener("phase", (ev: MessageEvent) => {
+    (async () => {
       try {
-        const d = JSON.parse(ev.data);
-        appendLog(`[PHASE] ${d.phase}`);
-      } catch { /* noop */ }
-    });
-    es.addEventListener("progress", (ev: MessageEvent) => {
-      try {
-        const d = JSON.parse(ev.data);
-        const tag = d.success ? "OK" : d.skipped ? "SKIP" : d.ignored ? "IGN" : "FAIL";
-        appendLog(`[${tag}] ${d.source_email ?? ""} • ${d.file_name ?? ""}${d.error ? ` — ${d.error}` : ""}`);
-        if (d.totals) {
-          setState((c) => ({
-            ...c,
-            migrationProgress: {
-              ...c.migrationProgress,
-              filesMigrated: d.totals.files_migrated ?? c.migrationProgress.filesMigrated,
-              failedFiles: d.totals.files_failed ?? c.migrationProgress.failedFiles,
-            },
-          }));
-        }
-      } catch { /* noop */ }
-    });
-    es.addEventListener("done", () => { appendLog("[DONE] Migration finished"); es.close(); });
-    es.addEventListener("error", () => { es.close(); });
+        const streamToken = await getStreamToken("migration");
+        if (cancelled) return;
+        const url = buildApiUrl(
+          `/api/migration/stream?run_id=${encodeURIComponent(runId)}&stream_token=${encodeURIComponent(streamToken)}`,
+        );
+        es = new EventSource(url);
 
-    return () => es.close();
+        es.addEventListener("phase", (ev: MessageEvent) => {
+          try {
+            const d = JSON.parse(ev.data);
+            appendLog(`[PHASE] ${d.phase}`);
+          } catch { /* noop */ }
+        });
+        es.addEventListener("progress", (ev: MessageEvent) => {
+          try {
+            const d = JSON.parse(ev.data);
+            const tag = d.success ? "OK" : d.skipped ? "SKIP" : d.ignored ? "IGN" : "FAIL";
+            appendLog(`[${tag}] ${d.source_email ?? ""} • ${d.file_name ?? ""}${d.error ? ` — ${d.error}` : ""}`);
+            if (d.totals) {
+              setState((c) => ({
+                ...c,
+                migrationProgress: {
+                  ...c.migrationProgress,
+                  filesMigrated: d.totals.files_migrated ?? c.migrationProgress.filesMigrated,
+                  failedFiles: d.totals.files_failed ?? c.migrationProgress.failedFiles,
+                },
+              }));
+            }
+          } catch { /* noop */ }
+        });
+        es.addEventListener("done", () => { appendLog("[DONE] Migration finished"); es?.close(); });
+        es.addEventListener("error", () => { es?.close(); });
+      } catch {
+        // Stream token failed — polling fallback below still updates status.
+      }
+    })();
+
+    return () => { cancelled = true; es?.close(); };
   }, [state.migrationProgress.migrationId, state.migrationProgress.status]);
 
   // Polling: authoritative status snapshot (works after VM/worker restart)

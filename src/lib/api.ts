@@ -233,6 +233,19 @@ export interface DiscoveryTotals {
   total_size_bytes: number;
 }
 
+/**
+ * POST /api/discovery/stream-token (or /api/migration/stream-token)
+ * EventSource cannot send Authorization headers, so the backend issues a
+ * short-lived single-use token (?stream_token=…) for the SSE URL.
+ */
+export async function getStreamToken(
+  kind: "discovery" | "migration" = "discovery",
+): Promise<string> {
+  const res = await apiFetch(`/api/${kind}/stream-token`, { method: "POST" });
+  const data = await parseJSON<{ stream_token: string }>(res, "Failed to get stream token");
+  return data.stream_token;
+}
+
 export async function startDiscovery(params: {
   runId: string;
   userMapping: Record<string, string>;
