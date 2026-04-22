@@ -5,15 +5,18 @@ import {
   fetchStorageSizes,
   getMigrationStatus,
   retryFailed,
-  runScan,
   saveConfig,
   saveMigrationMode,
-  startMigration,
+  startDiscovery,
+  getDiscoverySummary,
+  totalsToScanSummary,
+  startMigrationFresh,
+  resumeMigration,
   uploadSharedDriveMapping,
   uploadUserMapping,
-  validateConnection,
   runPreflight,
 } from "@/lib/api";
+import { buildApiUrl } from "@/lib/backend";
 import { useToast } from "@/hooks/use-toast";
 import type {
   ConnectionStatus,
