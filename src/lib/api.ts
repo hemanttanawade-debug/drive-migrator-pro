@@ -218,81 +218,157 @@ export async function saveMigrationMode(mode: string, sessionId?: string) {
   );
 }
 
-// ─── Step 5: scan ─────────────────────────────────────────────────────────────
+// ─── Step 5: Discovery (pre-migration scan) ───────────────────────────────────
 
-/**
- * (assumed) POST /api/scan — walks all mapped users/drives and returns
- * pre-migration totals. Persists to SQL on the backend.
- */
-export async function runScan(sessionId?: string): Promise<ScanSummary> {
-  const res = await apiFetch("/api/scan", {
+const BYTES_PER_GB = 1024 ** 3;
+// Conservative throughput assumption for time estimates (≈ Drive API average)
+const GB_PER_HOUR = 4;
+
+export interface DiscoveryTotals {
+  total_users: number;
+  completed_users: number;
+  failed_users: number;
+  total_files: number;
+  total_folders: number;
+  total_size_bytes: number;
+}
+
+export async function startDiscovery(params: {
+  runId: string;
+  userMapping: Record<string, string>;
+  workers?: number;
+  sessionId?: string;
+}): Promise<{ run_id: string; total_users: number }> {
+  const res = await apiFetch("/api/discovery/start", {
     method: "POST",
-    body: JSON.stringify(sessionId ? { sessionId } : {}),
+    body: JSON.stringify({
+      runId: params.runId,
+      userMapping: params.userMapping,
+      workers: params.workers ?? 4,
+      ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+    }),
   });
-  const data = await parseJSON<{
-    totalFiles?: number;
-    totalFolders?: number;
-    totalSizeGb?: number;
-    estimateDays?: number;
-    estimateHours?: number;
-    total_files?: number;
-    total_folders?: number;
-    total_size_gb?: number;
-    estimate_days?: number;
-    estimate_hours?: number;
-  }>(res, "Failed to scan source drives");
+  return parseJSON(res, "Failed to start discovery");
+}
 
+export async function getDiscoverySummary(runId: string): Promise<{
+  status: string;
+  totals: DiscoveryTotals;
+}> {
+  const res = await apiFetch(`/api/discovery/summary?run_id=${encodeURIComponent(runId)}`);
+  // 202 = still running — also returns totals
+  if (res.status === 202) {
+    const data = await res.json();
+    return { status: "running", totals: data.totals };
+  }
+  return parseJSON(res, "Failed to fetch discovery summary");
+}
+
+export function totalsToScanSummary(totals: DiscoveryTotals): ScanSummary {
+  const sizeGb = totals.total_size_bytes / BYTES_PER_GB;
+  const totalHours = sizeGb / GB_PER_HOUR;
+  const estimateDays = Math.floor(totalHours / 24);
+  const estimateHours = Math.round(totalHours - estimateDays * 24);
   return {
-    totalFiles: data.totalFiles ?? data.total_files ?? 0,
-    totalFolders: data.totalFolders ?? data.total_folders ?? 0,
-    totalSizeGb: data.totalSizeGb ?? data.total_size_gb ?? 0,
-    estimateDays: data.estimateDays ?? data.estimate_days ?? 0,
-    estimateHours: data.estimateHours ?? data.estimate_hours ?? 0,
+    totalFiles: totals.total_files,
+    totalFolders: totals.total_folders,
+    totalSizeGb: Number(sizeGb.toFixed(2)),
+    estimateDays,
+    estimateHours,
     scanned: true,
   };
 }
 
 // ─── Migration execution ──────────────────────────────────────────────────────
 
-export async function startMigration(
-  mode: string,
-  opts?: { migrationId?: string; sessionId?: string }
-) {
-  const res = await apiFetch("/api/migrate", {
+export async function startMigrationFresh(params: {
+  runId: string;
+  userMapping: Record<string, string>;
+  folderWorkers?: number;
+  globalWorkers?: number;
+}): Promise<{ run_id: string; total_users: number }> {
+  const res = await apiFetch("/api/migration/start", {
     method: "POST",
-    body: JSON.stringify({ mode, ...opts }),
+    body: JSON.stringify({
+      runId: params.runId,
+      userMapping: params.userMapping,
+      folderWorkers: params.folderWorkers ?? 4,
+      globalWorkers: params.globalWorkers ?? 14,
+    }),
   });
-  return parseJSON<{ migrationId: string }>(res, "Failed to start migration");
+  return parseJSON(res, "Failed to start migration");
+}
+
+export async function resumeMigration(params: {
+  runId: string;
+  folderWorkers?: number;
+  globalWorkers?: number;
+}): Promise<{ run_id: string; total_users: number; pending_files: number; done_files: number }> {
+  const res = await apiFetch("/api/migration/resume", {
+    method: "POST",
+    body: JSON.stringify({
+      runId: params.runId,
+      folderWorkers: params.folderWorkers ?? 4,
+      globalWorkers: params.globalWorkers ?? 14,
+    }),
+  });
+  return parseJSON(res, "Failed to resume migration");
+}
+
+export interface MigrationRunRow {
+  run_id: string;
+  status: string;
+  start_time: string | null;
+  end_time: string | null;
+  total_items: number;
+  completed: number;
+  failed: number;
+  pending: number;
+  done: number;
+  source_domain: string;
+  dest_domain: string;
+  resumable: boolean;
+}
+
+export async function listMigrationRuns(): Promise<MigrationRunRow[]> {
+  const res = await apiFetch("/api/migration/runs");
+  const data = await parseJSON<{ runs: MigrationRunRow[] }>(res, "Failed to list runs");
+  return data.runs ?? [];
 }
 
 export async function getMigrationStatus(migrationId: string) {
-  const res = await apiFetch(`/api/migration/${migrationId}/status`);
+  const res = await apiFetch(`/api/migration/status?run_id=${encodeURIComponent(migrationId)}`);
   const data = await parseJSON<{
-    migrationId?: string;
-    migration_id?: string;
+    run_id?: string;
     status: string;
-    totalUsers?: number;
-    total_users?: number;
-    filesMigrated?: number;
-    files_migrated?: number;
-    failedFiles?: number;
-    failed_files?: number;
-    logs?: string[];
+    totals?: {
+      total_users?: number;
+      files_migrated?: number;
+      files_failed?: number;
+      files_done?: number;
+      files_total?: number;
+    };
+    summary?: any;
   }>(res, "Failed to get migration status");
 
-  return {
-    migrationId: data.migrationId ?? data.migration_id,
-    status: data.status,
-    totalUsers: data.totalUsers ?? data.total_users ?? 0,
-    filesMigrated: data.filesMigrated ?? data.files_migrated ?? 0,
-    failedFiles: data.failedFiles ?? data.failed_files ?? 0,
-    logs: data.logs ?? [],
-  };
-}
+  const totals = data.totals ?? {};
+  // Map backend statuses ("running" | "done" | "error" | SQL "COMPLETED" | "FAILED" | …)
+  // to the frontend's MigrationProgress["status"] union.
+  const raw = (data.status || "").toLowerCase();
+  let status: "pending" | "running" | "completed" | "failed";
+  if (raw === "running" || raw === "in_progress") status = "running";
+  else if (raw === "done" || raw === "completed") status = "completed";
+  else if (raw === "error" || raw === "failed") status = "failed";
+  else status = "pending";
 
-export async function getMigrationLogs(migrationId: string) {
-  const res = await apiFetch(`/api/migration/${migrationId}/logs`);
-  return parseJSON<{ logs: string[] }>(res, "Failed to get migration logs");
+  return {
+    migrationId: data.run_id ?? migrationId,
+    status,
+    totalUsers: totals.total_users ?? 0,
+    filesMigrated: totals.files_migrated ?? 0,
+    failedFiles: totals.files_failed ?? 0,
+    logs: [] as string[],
+  };
 }
 
 export async function downloadReport(migrationId: string): Promise<Blob> {
@@ -308,8 +384,8 @@ export async function downloadLogs(migrationId: string): Promise<Blob> {
 }
 
 export async function retryFailed(migrationId: string) {
-  const res = await apiFetch(`/api/migration/${migrationId}/retry`, { method: "POST" });
-  return parseJSON<{ success: boolean }>(res, "Failed to retry failed files");
+  // Resume re-processes only PENDING/FAILED rows — that IS the retry semantic.
+  return resumeMigration({ runId: migrationId });
 }
 
 // ─── Dashboard (assumed) ──────────────────────────────────────────────────────
