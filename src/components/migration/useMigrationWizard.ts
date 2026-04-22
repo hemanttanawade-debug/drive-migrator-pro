@@ -5,15 +5,18 @@ import {
   fetchStorageSizes,
   getMigrationStatus,
   retryFailed,
-  runScan,
   saveConfig,
   saveMigrationMode,
-  startMigration,
+  startDiscovery,
+  getDiscoverySummary,
+  totalsToScanSummary,
+  startMigrationFresh,
+  resumeMigration,
   uploadSharedDriveMapping,
   uploadUserMapping,
-  validateConnection,
   runPreflight,
 } from "@/lib/api";
+import { buildApiUrl } from "@/lib/backend";
 import { useToast } from "@/hooks/use-toast";
 import type {
   ConnectionStatus,
@@ -497,23 +500,61 @@ export const useMigrationWizard = () => {
 
   // ─── Step 5: Scan + Execute ─────────────────────────────────────────────────
 
+  // ─── Step 5: Discovery (pre-scan) + Execute ────────────────────────────────
+
+  // Stable run identifier shared by /api/discovery/start and /api/migration/start
+  // — backend uses it as the SQL primary key.
+  const runIdRef = useRef<string>("");
+  const ensureRunId = useCallback(() => {
+    if (!runIdRef.current) {
+      const ts = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
+      runIdRef.current = `run_${ts}`;
+    }
+    return runIdRef.current;
+  }, []);
+
+  const buildUserMapping = useCallback((): Record<string, string> => {
+    const map: Record<string, string> = {};
+    for (const m of state.userMappings) {
+      if (m.sourceUser && m.destinationUser) map[m.sourceUser] = m.destinationUser;
+    }
+    return map;
+  }, [state.userMappings]);
+
   const runPreScan = useCallback(async () => {
     if (!guardEdits()) return;
+    const userMapping = buildUserMapping();
+    if (Object.keys(userMapping).length === 0) {
+      toast({ title: "No users to scan", description: "Upload a user mapping first.", variant: "destructive" });
+      return;
+    }
     setLoading("scanning", true);
     try {
       const sessionId = await ensureSession();
-      const summary = await runScan(sessionId);
-      setState((c) => ({ ...c, scan: summary }));
+      const runId = ensureRunId();
+      await startDiscovery({ runId, userMapping, sessionId });
+
+      // Stream progress via SSE; resolve once the 'done' event fires.
+      await new Promise<void>((resolve, reject) => {
+        const url = buildApiUrl(`/api/discovery/stream?run_id=${encodeURIComponent(runId)}`);
+        const es = new EventSource(url, { withCredentials: true });
+        es.addEventListener("done", () => { es.close(); resolve(); });
+        es.addEventListener("error", () => { es.close(); reject(new Error("Discovery stream failed")); });
+      }).catch(() => { /* ignore — we'll fall back to summary below */ });
+
+      const summary = await getDiscoverySummary(runId);
+      const scan = totalsToScanSummary(summary.totals);
+      setState((c) => ({ ...c, scan }));
       toast({
         title: "Scan complete",
-        description: `${summary.totalFiles.toLocaleString()} files • ${summary.totalSizeGb.toFixed(2)} GB`,
+        description: `${scan.totalFiles.toLocaleString()} files • ${scan.totalSizeGb.toFixed(2)} GB`,
       });
     } catch (e) {
       toast({ title: "Scan failed", description: getErrorMessage(e), variant: "destructive" });
     } finally {
       setLoading("scanning", false);
     }
-  }, [ensureSession, guardEdits, setLoading, toast]);
+  }, [buildUserMapping, ensureRunId, ensureSession, guardEdits, setLoading, toast]);
 
   const startMigrationRun = useCallback(async () => {
     if (!state.scan.scanned) {
@@ -522,10 +563,15 @@ export const useMigrationWizard = () => {
     }
     setLoading("startingMigration", true);
     try {
-      const sessionId = await ensureSession();
-      const migrationId =
-        state.migrationConfig.mode === "resume" ? state.migrationConfig.resumeMigrationId?.trim() : undefined;
-      const res = await startMigration(state.migrationConfig.mode, { sessionId, migrationId });
+      await ensureSession();
+      const isResume = state.migrationConfig.mode === "resume";
+      const runId = isResume
+        ? (state.migrationConfig.resumeMigrationId?.trim() || ensureRunId())
+        : ensureRunId();
+
+      const res = isResume
+        ? await resumeMigration({ runId })
+        : await startMigrationFresh({ runId, userMapping: buildUserMapping() });
 
       completionNoticeRef.current = null;
 
@@ -533,22 +579,76 @@ export const useMigrationWizard = () => {
         ...c,
         migrationProgress: {
           ...createInitialProgress(),
-          migrationId: res.migrationId,
+          migrationId: res.run_id,
           status: "running",
-          totalUsers: c.userMappings.length || c.sharedDriveMappings.length,
-          logs: [`[INFO] Migration queued with id=${res.migrationId}`],
+          totalUsers: res.total_users || c.userMappings.length,
+          logs: [
+            isResume
+              ? `[INFO] Resuming migration ${res.run_id}`
+              : `[INFO] Migration queued with id=${res.run_id}`,
+          ],
         },
       }));
-      toast({ title: "Migration started", description: `Migration ${res.migrationId} is running.` });
+      toast({
+        title: isResume ? "Migration resumed" : "Migration started",
+        description: `Migration ${res.run_id} is running.`,
+      });
     } catch (e) {
       toast({ title: "Could not start migration", description: getErrorMessage(e), variant: "destructive" });
     } finally {
       setLoading("startingMigration", false);
     }
-  }, [ensureSession, setLoading, state.migrationConfig.mode, state.migrationConfig.resumeMigrationId, state.scan.scanned, state.userMappings.length, state.sharedDriveMappings.length, toast]);
+  }, [buildUserMapping, ensureRunId, ensureSession, setLoading, state.migrationConfig.mode, state.migrationConfig.resumeMigrationId, state.scan.scanned, state.userMappings.length, toast]);
 
-  // ─── Polling ────────────────────────────────────────────────────────────────
+  // ─── Live progress: SSE for logs/phase + polling fallback for status ────────
 
+  // SSE: per-file events from /api/migration/stream
+  useEffect(() => {
+    if (state.migrationProgress.status !== "running" || !state.migrationProgress.migrationId) return;
+    const url = buildApiUrl(
+      `/api/migration/stream?run_id=${encodeURIComponent(state.migrationProgress.migrationId)}`,
+    );
+    const es = new EventSource(url, { withCredentials: true });
+
+    const appendLog = (line: string) =>
+      setState((c) => ({
+        ...c,
+        migrationProgress: {
+          ...c.migrationProgress,
+          logs: [...c.migrationProgress.logs, line].slice(-500),
+        },
+      }));
+
+    es.addEventListener("phase", (ev: MessageEvent) => {
+      try {
+        const d = JSON.parse(ev.data);
+        appendLog(`[PHASE] ${d.phase}`);
+      } catch { /* noop */ }
+    });
+    es.addEventListener("progress", (ev: MessageEvent) => {
+      try {
+        const d = JSON.parse(ev.data);
+        const tag = d.success ? "OK" : d.skipped ? "SKIP" : d.ignored ? "IGN" : "FAIL";
+        appendLog(`[${tag}] ${d.source_email ?? ""} • ${d.file_name ?? ""}${d.error ? ` — ${d.error}` : ""}`);
+        if (d.totals) {
+          setState((c) => ({
+            ...c,
+            migrationProgress: {
+              ...c.migrationProgress,
+              filesMigrated: d.totals.files_migrated ?? c.migrationProgress.filesMigrated,
+              failedFiles: d.totals.files_failed ?? c.migrationProgress.failedFiles,
+            },
+          }));
+        }
+      } catch { /* noop */ }
+    });
+    es.addEventListener("done", () => { appendLog("[DONE] Migration finished"); es.close(); });
+    es.addEventListener("error", () => { es.close(); });
+
+    return () => es.close();
+  }, [state.migrationProgress.migrationId, state.migrationProgress.status]);
+
+  // Polling: authoritative status snapshot (works after VM/worker restart)
   useEffect(() => {
     if (state.migrationProgress.status !== "running" || !state.migrationProgress.migrationId) return;
     let cancelled = false;
@@ -566,10 +666,9 @@ export const useMigrationWizard = () => {
             ...c.migrationProgress,
             migrationId: res.migrationId ?? c.migrationProgress.migrationId,
             status: nextStatus,
-            totalUsers: res.totalUsers,
-            filesMigrated: res.filesMigrated,
-            failedFiles: res.failedFiles,
-            logs: res.logs.length > 0 ? res.logs : c.migrationProgress.logs,
+            totalUsers: res.totalUsers || c.migrationProgress.totalUsers,
+            filesMigrated: res.filesMigrated || c.migrationProgress.filesMigrated,
+            failedFiles: res.failedFiles || c.migrationProgress.failedFiles,
           },
           completedSteps: isDone ? markStepCompleted(c.completedSteps, 4) : c.completedSteps,
         }));
