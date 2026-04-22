@@ -600,8 +600,55 @@ export const useMigrationWizard = () => {
     }
   }, [buildUserMapping, ensureRunId, ensureSession, setLoading, state.migrationConfig.mode, state.migrationConfig.resumeMigrationId, state.scan.scanned, state.userMappings.length, toast]);
 
-  // ─── Polling ────────────────────────────────────────────────────────────────
+  // ─── Live progress: SSE for logs/phase + polling fallback for status ────────
 
+  // SSE: per-file events from /api/migration/stream
+  useEffect(() => {
+    if (state.migrationProgress.status !== "running" || !state.migrationProgress.migrationId) return;
+    const url = buildApiUrl(
+      `/api/migration/stream?run_id=${encodeURIComponent(state.migrationProgress.migrationId)}`,
+    );
+    const es = new EventSource(url, { withCredentials: true });
+
+    const appendLog = (line: string) =>
+      setState((c) => ({
+        ...c,
+        migrationProgress: {
+          ...c.migrationProgress,
+          logs: [...c.migrationProgress.logs, line].slice(-500),
+        },
+      }));
+
+    es.addEventListener("phase", (ev: MessageEvent) => {
+      try {
+        const d = JSON.parse(ev.data);
+        appendLog(`[PHASE] ${d.phase}`);
+      } catch { /* noop */ }
+    });
+    es.addEventListener("progress", (ev: MessageEvent) => {
+      try {
+        const d = JSON.parse(ev.data);
+        const tag = d.success ? "OK" : d.skipped ? "SKIP" : d.ignored ? "IGN" : "FAIL";
+        appendLog(`[${tag}] ${d.source_email ?? ""} • ${d.file_name ?? ""}${d.error ? ` — ${d.error}` : ""}`);
+        if (d.totals) {
+          setState((c) => ({
+            ...c,
+            migrationProgress: {
+              ...c.migrationProgress,
+              filesMigrated: d.totals.files_migrated ?? c.migrationProgress.filesMigrated,
+              failedFiles: d.totals.files_failed ?? c.migrationProgress.failedFiles,
+            },
+          }));
+        }
+      } catch { /* noop */ }
+    });
+    es.addEventListener("done", () => { appendLog("[DONE] Migration finished"); es.close(); });
+    es.addEventListener("error", () => { es.close(); });
+
+    return () => es.close();
+  }, [state.migrationProgress.migrationId, state.migrationProgress.status]);
+
+  // Polling: authoritative status snapshot (works after VM/worker restart)
   useEffect(() => {
     if (state.migrationProgress.status !== "running" || !state.migrationProgress.migrationId) return;
     let cancelled = false;
@@ -619,10 +666,9 @@ export const useMigrationWizard = () => {
             ...c.migrationProgress,
             migrationId: res.migrationId ?? c.migrationProgress.migrationId,
             status: nextStatus,
-            totalUsers: res.totalUsers,
-            filesMigrated: res.filesMigrated,
-            failedFiles: res.failedFiles,
-            logs: res.logs.length > 0 ? res.logs : c.migrationProgress.logs,
+            totalUsers: res.totalUsers || c.migrationProgress.totalUsers,
+            filesMigrated: res.filesMigrated || c.migrationProgress.filesMigrated,
+            failedFiles: res.failedFiles || c.migrationProgress.failedFiles,
           },
           completedSteps: isDone ? markStepCompleted(c.completedSteps, 4) : c.completedSteps,
         }));
