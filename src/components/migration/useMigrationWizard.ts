@@ -15,6 +15,7 @@ import {
   uploadUserMapping,
   runPreflight,
   getStreamToken,
+  getCurrentConfig,
 } from "@/lib/api";
 import { buildApiUrl } from "@/lib/backend";
 import { useToast } from "@/hooks/use-toast";
@@ -161,8 +162,74 @@ async function openAuthenticatedStream(
   return es;
 }
 
+// ─── Persistence: keep wizard inputs across reload / logout ─────────────────
+// File objects can't be JSON-serialized — they're rebuilt from the backend
+// (uploads/credential/*.json + uploads/users.csv stay on disk until DELETE
+// /api/reset).  Everything else (domain, emails, mappings, scope, runId)
+// goes into localStorage.
+
+const STORAGE_KEY = "gws_wizard_state_v1";
+
+type PersistableState = Omit<
+  WizardState,
+  "csvFile" | "sharedDriveCsvFile" | "domainConfig"
+> & {
+  domainConfig: Omit<DomainConfig, "sourceCredentials" | "destinationCredentials">;
+  runId?: string;
+};
+
+const loadPersisted = (): { state: Partial<WizardState>; runId: string } | null => {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as PersistableState;
+    return {
+      state: {
+        ...parsed,
+        domainConfig: {
+          ...initialState.domainConfig,
+          ...parsed.domainConfig,
+          sourceCredentials: null,
+          destinationCredentials: null,
+        },
+        csvFile: null,
+        sharedDriveCsvFile: null,
+      },
+      runId: parsed.runId ?? "",
+    };
+  } catch {
+    return null;
+  }
+};
+
+const persist = (state: WizardState, runId: string) => {
+  try {
+    const { csvFile, sharedDriveCsvFile, domainConfig, ...rest } = state;
+    const payload: PersistableState = {
+      ...rest,
+      domainConfig: {
+        sourceDomain: domainConfig.sourceDomain,
+        sourceAdminEmail: domainConfig.sourceAdminEmail,
+        destinationDomain: domainConfig.destinationDomain,
+        destinationAdminEmail: domainConfig.destinationAdminEmail,
+      },
+      runId,
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+  } catch {
+    /* quota exceeded — ignore */
+  }
+};
+
+export const clearPersistedWizardState = () => {
+  try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
+};
+
 export const useMigrationWizard = () => {
-  const [state, setState] = useState<WizardState>(initialState);
+  const [state, setState] = useState<WizardState>(() => {
+    const persisted = loadPersisted();
+    return persisted ? { ...initialState, ...persisted.state } : initialState;
+  });
   const [loadingStates, setLoadingStates] = useState({
     savingConfig: false,
     validating: false,
@@ -184,11 +251,45 @@ export const useMigrationWizard = () => {
   });
 
   const configSavedRef = useRef(false);
-  const runIdRef = useRef<string>("");
+  const runIdRef = useRef<string>(loadPersisted()?.runId ?? "");
 
   // Migration SSE refs (discovery no longer uses SSE)
   const migrationTokenRef  = useRef<string | null>(null);
   const migrationEsRef = useRef<EventSource | null>(null);
+
+  // Persist serializable wizard state on every change
+  useEffect(() => {
+    persist(state, runIdRef.current);
+  }, [state]);
+
+  // Rehydrate domain config + last run id from backend on mount
+  // (covers the case where localStorage was cleared but the Flask session
+  // still has the persisted config on disk)
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const cfg = await getCurrentConfig();
+        if (!cfg || cancelled) return;
+        if (cfg.sourceCredExists || cfg.destCredExists) configSavedRef.current = true;
+        if (cfg.lastDiscoveryRunId && !runIdRef.current) {
+          runIdRef.current = cfg.lastDiscoveryRunId;
+        }
+        setState((c) => ({
+          ...c,
+          sessionId: cfg.sessionId || c.sessionId,
+          domainConfig: {
+            ...c.domainConfig,
+            sourceDomain: c.domainConfig.sourceDomain || cfg.sourceDomain,
+            sourceAdminEmail: c.domainConfig.sourceAdminEmail || cfg.sourceAdminEmail,
+            destinationDomain: c.domainConfig.destinationDomain || cfg.destinationDomain,
+            destinationAdminEmail: c.domainConfig.destinationAdminEmail || cfg.destinationAdminEmail,
+          },
+        }));
+      } catch { /* ignore */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   const setLoading = useCallback(
     (key: keyof typeof loadingStates, value: boolean) =>

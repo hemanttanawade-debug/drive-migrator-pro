@@ -38,8 +38,7 @@ const Dashboard = () => {
 
   useEffect(() => {
     void refresh();
-    const id = window.setInterval(() => void refresh(), 5000);
-    return () => window.clearInterval(id);
+    // No auto-polling — user explicitly clicks "Sync" / Refresh.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [migrationId]);
 
@@ -91,7 +90,7 @@ const Dashboard = () => {
         </div>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={refresh} disabled={loading}>
-            <RefreshCw className={cn("w-3.5 h-3.5 mr-2", loading && "animate-spin")} /> Refresh
+            <RefreshCw className={cn("w-3.5 h-3.5 mr-2", loading && "animate-spin")} /> Sync
           </Button>
           <Button variant="outline" size="sm" onClick={handleLogs} disabled={!migrationId}>
             <FileText className="w-3.5 h-3.5 mr-2" /> Log (.txt)
