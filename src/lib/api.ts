@@ -378,14 +378,26 @@ export async function getMigrationStatus(migrationId: string) {
   };
 }
 
+/**
+ * GET /api/export/sql?run_id=<id>&table=all&format=csv
+ * Returns a ZIP archive containing one CSV per migration table.
+ */
 export async function downloadReport(migrationId: string): Promise<Blob> {
-  const res = await apiFetch(`/api/migration/${migrationId}/report?format=csv`);
+  const res = await apiFetch(
+    `/api/export/sql?run_id=${encodeURIComponent(migrationId)}&table=all&format=csv`,
+  );
   if (!res.ok) throw new Error("Failed to download report");
   return res.blob();
 }
 
-export async function downloadLogs(migrationId: string): Promise<Blob> {
-  const res = await apiFetch(`/api/migration/${migrationId}/logs/download`);
+/**
+ * GET /api/export/logs?run_id=<id>&format=txt
+ * Returns the matching log lines as plain text.
+ */
+export async function downloadLogs(migrationId: string, format: "txt" | "json" = "txt"): Promise<Blob> {
+  const res = await apiFetch(
+    `/api/export/logs?run_id=${encodeURIComponent(migrationId)}&format=${format}`,
+  );
   if (!res.ok) throw new Error("Failed to download logs");
   return res.blob();
 }
@@ -394,12 +406,39 @@ export async function retryFailed(migrationId: string) {
   return resumeMigration({ runId: migrationId });
 }
 
-// ─── Dashboard (assumed) ──────────────────────────────────────────────────────
+// ─── Persisted wizard config (rehydrate after reload / logout) ───────────────
 
-/** GET /api/dashboard?migrationId=<id?> — current migration aggregates + per-user rows */
+export interface PersistedConfig {
+  sessionId: string;
+  sourceDomain: string;
+  sourceAdminEmail: string;
+  destinationDomain: string;
+  destinationAdminEmail: string;
+  migrationMode: string;
+  lastDiscoveryRunId: string;
+  sourceCredExists: boolean;
+  destCredExists: boolean;
+  csvExists: boolean;
+  migrationActive: boolean;
+}
+
+/** GET /api/config/current — fetch persisted wizard state from backend */
+export async function getCurrentConfig(): Promise<PersistedConfig | null> {
+  try {
+    const res = await apiFetch("/api/config/current");
+    if (!res.ok) return null;
+    return (await res.json()) as PersistedConfig;
+  } catch {
+    return null;
+  }
+}
+
+// ─── Dashboard ────────────────────────────────────────────────────────────────
+
+/** GET /api/dashboard?run_id=<id?> — current migration aggregates + per-user rows */
 export async function getDashboard(migrationId?: string): Promise<DashboardSummary> {
   const path = migrationId
-    ? `/api/dashboard?migrationId=${encodeURIComponent(migrationId)}`
+    ? `/api/dashboard?run_id=${encodeURIComponent(migrationId)}`
     : "/api/dashboard";
   const res = await apiFetch(path);
   if (!res.ok) {
