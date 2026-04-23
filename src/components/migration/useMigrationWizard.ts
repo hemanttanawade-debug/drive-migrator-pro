@@ -8,7 +8,6 @@ import {
   saveConfig,
   saveMigrationMode,
   startDiscovery,
-  getDiscoverySummary,
   totalsToScanSummary,
   startMigrationFresh,
   resumeMigration,
@@ -112,6 +111,56 @@ const scopeToMode = (scope: WizardState["migrationConfig"]["scope"]): WizardStat
   return "custom";
 };
 
+// ─── SSE helpers (migration only) ────────────────────────────────────────────
+
+async function openAuthenticatedStream(
+  url: string,
+  handlers: {
+    onProgress?: (data: unknown) => void;
+    onPhase?: (data: unknown) => void;
+    onDone: (data: unknown) => void;
+    onError: (err: Error) => void;
+  },
+  signal: { cancelled: boolean },
+): Promise<EventSource> {
+  const es = new EventSource(url);
+
+  let cleanClose = false;
+
+  es.addEventListener("progress", (ev: MessageEvent) => {
+    if (signal.cancelled) return;
+    try { handlers.onProgress?.(JSON.parse(ev.data)); } catch { /* noop */ }
+  });
+
+  es.addEventListener("phase", (ev: MessageEvent) => {
+    if (signal.cancelled) return;
+    try { handlers.onPhase?.(JSON.parse(ev.data)); } catch { /* noop */ }
+  });
+
+  es.addEventListener("done", (ev: MessageEvent) => {
+    if (signal.cancelled) return;
+    cleanClose = true;
+    try { handlers.onDone(JSON.parse(ev.data)); } catch { handlers.onDone({}); }
+    es.close();
+  });
+
+  es.addEventListener("error", (ev: MessageEvent) => {
+    if (signal.cancelled) return;
+    cleanClose = true;
+    handlers.onError(new Error((ev as any).data ?? "SSE server error event"));
+    es.close();
+  });
+
+  es.onerror = () => {
+    if (signal.cancelled) return;
+    if (cleanClose) return;
+    handlers.onError(new Error("SSE connection dropped unexpectedly"));
+    es.close();
+  };
+
+  return es;
+}
+
 export const useMigrationWizard = () => {
   const [state, setState] = useState<WizardState>(initialState);
   const [loadingStates, setLoadingStates] = useState({
@@ -128,16 +177,18 @@ export const useMigrationWizard = () => {
   });
   const { toast } = useToast();
   const completionNoticeRef = useRef<string | null>(null);
-  // Tracks which credential files were freshly selected (not restored from state).
-  // Only fresh files get appended to FormData — prevents ERR_UPLOAD_FILE_CHANGED
-  // when re-submitting after the browser has invalidated the original File handle.
+
   const freshCredsRef = useRef<{ source: boolean; destination: boolean }>({
     source: false,
     destination: false,
   });
-  // True once /api/config has been saved successfully — switches subsequent
-  // saves to PUT so credential files become optional on the backend.
+
   const configSavedRef = useRef(false);
+  const runIdRef = useRef<string>("");
+
+  // Migration SSE refs (discovery no longer uses SSE)
+  const migrationTokenRef  = useRef<string | null>(null);
+  const migrationEsRef = useRef<EventSource | null>(null);
 
   const setLoading = useCallback(
     (key: keyof typeof loadingStates, value: boolean) =>
@@ -178,7 +229,6 @@ export const useMigrationWizard = () => {
     });
   }, []);
 
-  // Lock all editing once a migration is running.
   const guardEdits = useCallback(() => {
     if (isMigrationRunning) {
       toast({
@@ -195,14 +245,10 @@ export const useMigrationWizard = () => {
     (config: DomainConfig) => {
       if (!guardEdits()) return;
       setState((c) => {
-        // Detect which credential files are NEW File instances vs unchanged refs.
         if (config.sourceCredentials && config.sourceCredentials !== c.domainConfig.sourceCredentials) {
           freshCredsRef.current.source = true;
         }
-        if (
-          config.destinationCredentials &&
-          config.destinationCredentials !== c.domainConfig.destinationCredentials
-        ) {
+        if (config.destinationCredentials && config.destinationCredentials !== c.domainConfig.destinationCredentials) {
           freshCredsRef.current.destination = true;
         }
         return { ...invalidateFromStep(0)(c), domainConfig: config };
@@ -217,7 +263,6 @@ export const useMigrationWizard = () => {
       setState((c) => ({
         ...invalidateFromStep(2)(c),
         migrationConfig: { ...config, mode: scopeToMode(config.scope) },
-        // wipe any irrelevant uploads when scope changes
         csvFile: config.scope === "shared-drives" ? null : c.csvFile,
         userMappings: config.scope === "shared-drives" ? [] : c.userMappings,
         sharedDriveCsvFile: config.scope === "my-drive" ? null : c.sharedDriveCsvFile,
@@ -274,6 +319,28 @@ export const useMigrationWizard = () => {
     return res.sessionId;
   }, [state.sessionId]);
 
+  const ensureRunId = useCallback(() => {
+    if (!runIdRef.current) {
+      const ts = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
+      runIdRef.current = `run_${ts}`;
+    }
+    return runIdRef.current;
+  }, []);
+
+  const resetRunId = useCallback(() => {
+    const ts = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
+    runIdRef.current = `run_${ts}`;
+    return runIdRef.current;
+  }, []);
+
+  const buildUserMapping = useCallback((): Record<string, string> => {
+    const map: Record<string, string> = {};
+    for (const m of state.userMappings) {
+      if (m.sourceUser && m.destinationUser) map[m.sourceUser] = m.destinationUser;
+    }
+    return map;
+  }, [state.userMappings]);
+
   // ─── Step 1: Domain config ──────────────────────────────────────────────────
 
   const submitDomainConfig = useCallback(async () => {
@@ -288,9 +355,6 @@ export const useMigrationWizard = () => {
       fd.append("destinationDomain", state.domainConfig.destinationDomain.trim());
       fd.append("destinationAdminEmail", state.domainConfig.destinationAdminEmail.trim());
 
-      // Only send credential files that were freshly selected by the user
-      // in this browser session. Re-uploading a stale File handle triggers
-      // the browser's ERR_UPLOAD_FILE_CHANGED error.
       if (state.domainConfig.sourceCredentials && freshCredsRef.current.source) {
         fd.append("sourceCredentials", state.domainConfig.sourceCredentials);
       }
@@ -298,8 +362,6 @@ export const useMigrationWizard = () => {
         fd.append("destinationCredentials", state.domainConfig.destinationCredentials);
       }
 
-      // First save → POST (creates files on backend).
-      // Subsequent saves → PUT (credential files optional, kept if not sent).
       const method = configSavedRef.current ? "PUT" : "POST";
       const res = await saveConfig(fd, method);
 
@@ -336,8 +398,6 @@ export const useMigrationWizard = () => {
 
     try {
       const sessionId = await ensureSession();
-      // Use /api/preflight — the real 4-check endpoint (service account,
-      // domain delegation, Cloud SQL, GCS bucket). /api/validate only covers 2.
       const res = await runPreflight(sessionId);
 
       const checkMap: Record<string, "service_account" | "domain_delegation" | "cloud_sql" | "gcs_bucket"> = {
@@ -431,10 +491,7 @@ export const useMigrationWizard = () => {
       const res = await uploadUserMapping(normalized, sessionId);
       const enriched = await enrichWithSizes(sessionId, res.mappings);
 
-      setState((c) => ({
-        ...c,
-        userMappings: enriched,
-      }));
+      setState((c) => ({ ...c, userMappings: enriched }));
       toast({ title: "User mapping uploaded", description: `${enriched.length} users saved to Flask.` });
     } catch (e) {
       toast({ title: "Could not upload user mapping", description: getErrorMessage(e), variant: "destructive" });
@@ -499,61 +556,32 @@ export const useMigrationWizard = () => {
     }
   }, [ensureSession, guardEdits, setLoading, state.migrationConfig.mode, toast]);
 
-  // ─── Step 5: Scan + Execute ─────────────────────────────────────────────────
-
-  // ─── Step 5: Discovery (pre-scan) + Execute ────────────────────────────────
-
-  // Stable run identifier shared by /api/discovery/start and /api/migration/start
-  // — backend uses it as the SQL primary key.
-  const runIdRef = useRef<string>("");
-  const ensureRunId = useCallback(() => {
-    if (!runIdRef.current) {
-      const ts = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
-      runIdRef.current = `run_${ts}`;
-    }
-    return runIdRef.current;
-  }, []);
-
-  const buildUserMapping = useCallback((): Record<string, string> => {
-    const map: Record<string, string> = {};
-    for (const m of state.userMappings) {
-      if (m.sourceUser && m.destinationUser) map[m.sourceUser] = m.destinationUser;
-    }
-    return map;
-  }, [state.userMappings]);
+  // ─── Step 5: Pre-scan (Discovery) ──────────────────────────────────────────
+  // Simple: POST /api/discovery/start, await the response, done.
+  // No SSE, no polling, no token management.
 
   const runPreScan = useCallback(async () => {
     if (!guardEdits()) return;
+
     const userMapping = buildUserMapping();
     if (Object.keys(userMapping).length === 0) {
       toast({ title: "No users to scan", description: "Upload a user mapping first.", variant: "destructive" });
       return;
     }
+
     setLoading("scanning", true);
+
+    // Fresh run ID for each new scan so we never 409-conflict with a previous run
+    const runId = resetRunId();
+
     try {
       const sessionId = await ensureSession();
-      const runId = ensureRunId();
-      await startDiscovery({ runId, userMapping, sessionId });
 
-      // Stream progress via SSE; resolve once the 'done' event fires.
-      // EventSource cannot send Bearer headers — fetch a short-lived token first.
-      await new Promise<void>(async (resolve, reject) => {
-        try {
-          const streamToken = await getStreamToken("discovery");
-          const url = buildApiUrl(
-            `/api/discovery/stream?run_id=${encodeURIComponent(runId)}&stream_token=${encodeURIComponent(streamToken)}`,
-          );
-          const es = new EventSource(url);
-          es.addEventListener("done", () => { es.close(); resolve(); });
-          es.addEventListener("error", () => { es.close(); reject(new Error("Discovery stream failed")); });
-        } catch (err) {
-          reject(err);
-        }
-      }).catch(() => { /* ignore — we'll fall back to summary below */ });
+      const { totals } = await startDiscovery({ runId, userMapping, sessionId });
 
-      const summary = await getDiscoverySummary(runId);
-      const scan = totalsToScanSummary(summary.totals);
+      const scan = totalsToScanSummary(totals);
       setState((c) => ({ ...c, scan }));
+
       toast({
         title: "Scan complete",
         description: `${scan.totalFiles.toLocaleString()} files • ${scan.totalSizeGb.toFixed(2)} GB`,
@@ -563,7 +591,9 @@ export const useMigrationWizard = () => {
     } finally {
       setLoading("scanning", false);
     }
-  }, [buildUserMapping, ensureRunId, ensureSession, guardEdits, setLoading, toast]);
+  }, [buildUserMapping, ensureSession, guardEdits, resetRunId, setLoading, toast]);
+
+  // ─── Step 5: Start / Resume migration ──────────────────────────────────────
 
   const startMigrationRun = useCallback(async () => {
     if (!state.scan.scanned) {
@@ -574,6 +604,7 @@ export const useMigrationWizard = () => {
     try {
       await ensureSession();
       const isResume = state.migrationConfig.mode === "resume";
+
       const runId = isResume
         ? (state.migrationConfig.resumeMigrationId?.trim() || ensureRunId())
         : ensureRunId();
@@ -583,6 +614,7 @@ export const useMigrationWizard = () => {
         : await startMigrationFresh({ runId, userMapping: buildUserMapping() });
 
       completionNoticeRef.current = null;
+      migrationTokenRef.current = null;
 
       setState((c) => ({
         ...c,
@@ -609,15 +641,14 @@ export const useMigrationWizard = () => {
     }
   }, [buildUserMapping, ensureRunId, ensureSession, setLoading, state.migrationConfig.mode, state.migrationConfig.resumeMigrationId, state.scan.scanned, state.userMappings.length, toast]);
 
-  // ─── Live progress: SSE for logs/phase + polling fallback for status ────────
+  // ─── Live progress: SSE for migration logs/phase ────────────────────────────
 
-  // SSE: per-file events from /api/migration/stream
   useEffect(() => {
     if (state.migrationProgress.status !== "running" || !state.migrationProgress.migrationId) return;
+    if (migrationEsRef.current) return;
 
-    let es: EventSource | null = null;
-    let cancelled = false;
     const runId = state.migrationProgress.migrationId;
+    const signal = { cancelled: false };
 
     const appendLog = (line: string) =>
       setState((c) => ({
@@ -630,50 +661,66 @@ export const useMigrationWizard = () => {
 
     (async () => {
       try {
-        const streamToken = await getStreamToken("migration");
-        if (cancelled) return;
-        const url = buildApiUrl(
-          `/api/migration/stream?run_id=${encodeURIComponent(runId)}&stream_token=${encodeURIComponent(streamToken)}`,
-        );
-        es = new EventSource(url);
+        if (!migrationTokenRef.current) {
+          migrationTokenRef.current = await getStreamToken();
+        }
+        if (signal.cancelled) return;
 
-        es.addEventListener("phase", (ev: MessageEvent) => {
-          try {
-            const d = JSON.parse(ev.data);
-            appendLog(`[PHASE] ${d.phase}`);
-          } catch { /* noop */ }
-        });
-        es.addEventListener("progress", (ev: MessageEvent) => {
-          try {
-            const d = JSON.parse(ev.data);
-            const tag = d.success ? "OK" : d.skipped ? "SKIP" : d.ignored ? "IGN" : "FAIL";
-            appendLog(`[${tag}] ${d.source_email ?? ""} • ${d.file_name ?? ""}${d.error ? ` — ${d.error}` : ""}`);
-            if (d.totals) {
-              setState((c) => ({
-                ...c,
-                migrationProgress: {
-                  ...c.migrationProgress,
-                  filesMigrated: d.totals.files_migrated ?? c.migrationProgress.filesMigrated,
-                  failedFiles: d.totals.files_failed ?? c.migrationProgress.failedFiles,
-                },
-              }));
-            }
-          } catch { /* noop */ }
-        });
-        es.addEventListener("done", () => { appendLog("[DONE] Migration finished"); es?.close(); });
-        es.addEventListener("error", () => { es?.close(); });
+        const url = buildApiUrl(
+          `/api/migration/stream` +
+          `?run_id=${encodeURIComponent(runId)}` +
+          `&stream_token=${encodeURIComponent(migrationTokenRef.current)}`,
+        );
+
+        const es = await openAuthenticatedStream(
+          url,
+          {
+            onPhase: (d: any) => appendLog(`[PHASE] ${d.phase ?? ""}`),
+            onProgress: (d: any) => {
+              const tag = d.success ? "OK" : d.skipped ? "SKIP" : d.ignored ? "IGN" : "FAIL";
+              appendLog(`[${tag}] ${d.source_email ?? ""} • ${d.file_name ?? ""}${d.error ? ` — ${d.error}` : ""}`);
+              if (d.totals) {
+                setState((c) => ({
+                  ...c,
+                  migrationProgress: {
+                    ...c.migrationProgress,
+                    filesMigrated: d.totals.files_migrated ?? c.migrationProgress.filesMigrated,
+                    failedFiles:   d.totals.files_failed   ?? c.migrationProgress.failedFiles,
+                  },
+                }));
+              }
+            },
+            onDone: () => appendLog("[DONE] Migration finished"),
+            onError: () => { /* polling below handles status */ },
+          },
+          signal,
+        );
+        migrationEsRef.current = es;
       } catch {
-        // Stream token failed — polling fallback below still updates status.
+        // Token fetch failed — polling fallback still updates status
       }
     })();
 
-    return () => { cancelled = true; es?.close(); };
+    return () => {
+      signal.cancelled = true;
+      migrationEsRef.current?.close();
+      migrationEsRef.current = null;
+    };
   }, [state.migrationProgress.migrationId, state.migrationProgress.status]);
 
-  // Polling: authoritative status snapshot (works after VM/worker restart)
+  useEffect(() => {
+    if (state.migrationProgress.status === "running") return;
+    migrationEsRef.current?.close();
+    migrationEsRef.current = null;
+    migrationTokenRef.current = null;
+  }, [state.migrationProgress.status]);
+
+  // ─── Polling: authoritative migration status ────────────────────────────────
+
   useEffect(() => {
     if (state.migrationProgress.status !== "running" || !state.migrationProgress.migrationId) return;
     let cancelled = false;
+
     const poll = async () => {
       try {
         const res = await getMigrationStatus(state.migrationProgress.migrationId);
@@ -686,11 +733,11 @@ export const useMigrationWizard = () => {
           ...c,
           migrationProgress: {
             ...c.migrationProgress,
-            migrationId: res.migrationId ?? c.migrationProgress.migrationId,
-            status: nextStatus,
-            totalUsers: res.totalUsers || c.migrationProgress.totalUsers,
+            migrationId:   res.migrationId   ?? c.migrationProgress.migrationId,
+            status:        nextStatus,
+            totalUsers:    res.totalUsers    || c.migrationProgress.totalUsers,
             filesMigrated: res.filesMigrated || c.migrationProgress.filesMigrated,
-            failedFiles: res.failedFiles || c.migrationProgress.failedFiles,
+            failedFiles:   res.failedFiles   || c.migrationProgress.failedFiles,
           },
           completedSteps: isDone ? markStepCompleted(c.completedSteps, 4) : c.completedSteps,
         }));
@@ -707,9 +754,10 @@ export const useMigrationWizard = () => {
         }
       } catch (e) {
         if (cancelled) return;
-        toast({ title: "Status refresh failed", description: getErrorMessage(e), variant: "destructive" });
+        console.warn("[migration poll]", getErrorMessage(e));
       }
     };
+
     void poll();
     const id = window.setInterval(() => void poll(), 3000);
     return () => { cancelled = true; window.clearInterval(id); };
@@ -741,6 +789,11 @@ export const useMigrationWizard = () => {
     try {
       await retryFailed(state.migrationProgress.migrationId);
       completionNoticeRef.current = null;
+
+      migrationEsRef.current?.close();
+      migrationEsRef.current = null;
+      migrationTokenRef.current = null;
+
       setState((c) => ({
         ...c,
         currentStep: 4,

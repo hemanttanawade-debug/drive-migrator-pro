@@ -234,24 +234,20 @@ export interface DiscoveryTotals {
 }
 
 /**
- * POST /api/discovery/stream-token (or /api/migration/stream-token)
- * EventSource cannot send Authorization headers, so the backend issues a
- * short-lived single-use token (?stream_token=…) for the SSE URL.
+ * POST /api/discovery/start
+ *
+ * Runs the full Drive scan synchronously on the backend and returns totals
+ * once complete. No streaming or polling required.
+ *
+ * Returns:
+ *   { run_id, totals: DiscoveryTotals, results: [...per-user dicts] }
  */
-export async function getStreamToken(
-  kind: "discovery" | "migration" = "discovery",
-): Promise<string> {
-  const res = await apiFetch(`/api/${kind}/stream-token`, { method: "POST" });
-  const data = await parseJSON<{ stream_token: string }>(res, "Failed to get stream token");
-  return data.stream_token;
-}
-
 export async function startDiscovery(params: {
   runId: string;
   userMapping: Record<string, string>;
   workers?: number;
   sessionId?: string;
-}): Promise<{ run_id: string; total_users: number }> {
+}): Promise<{ run_id: string; totals: DiscoveryTotals; results: unknown[] }> {
   const res = await apiFetch("/api/discovery/start", {
     method: "POST",
     body: JSON.stringify({
@@ -261,20 +257,7 @@ export async function startDiscovery(params: {
       ...(params.sessionId ? { sessionId: params.sessionId } : {}),
     }),
   });
-  return parseJSON(res, "Failed to start discovery");
-}
-
-export async function getDiscoverySummary(runId: string): Promise<{
-  status: string;
-  totals: DiscoveryTotals;
-}> {
-  const res = await apiFetch(`/api/discovery/summary?run_id=${encodeURIComponent(runId)}`);
-  // 202 = still running — also returns totals
-  if (res.status === 202) {
-    const data = await res.json();
-    return { status: "running", totals: data.totals };
-  }
-  return parseJSON(res, "Failed to fetch discovery summary");
+  return parseJSON(res, "Failed to run discovery scan");
 }
 
 export function totalsToScanSummary(totals: DiscoveryTotals): ScanSummary {
@@ -290,6 +273,19 @@ export function totalsToScanSummary(totals: DiscoveryTotals): ScanSummary {
     estimateHours,
     scanned: true,
   };
+}
+
+// ─── Migration stream token (still needed for migration SSE) ──────────────────
+
+/**
+ * POST /api/migration/stream-token
+ * EventSource cannot send Authorization headers, so the backend issues a
+ * short-lived single-use token (?stream_token=…) for the migration SSE URL.
+ */
+export async function getStreamToken(): Promise<string> {
+  const res = await apiFetch("/api/migration/stream-token", { method: "POST" });
+  const data = await parseJSON<{ stream_token: string }>(res, "Failed to get stream token");
+  return data.stream_token;
 }
 
 // ─── Migration execution ──────────────────────────────────────────────────────
@@ -365,8 +361,6 @@ export async function getMigrationStatus(migrationId: string) {
   }>(res, "Failed to get migration status");
 
   const totals = data.totals ?? {};
-  // Map backend statuses ("running" | "done" | "error" | SQL "COMPLETED" | "FAILED" | …)
-  // to the frontend's MigrationProgress["status"] union.
   const raw = (data.status || "").toLowerCase();
   let status: "pending" | "running" | "completed" | "failed";
   if (raw === "running" || raw === "in_progress") status = "running";
@@ -397,7 +391,6 @@ export async function downloadLogs(migrationId: string): Promise<Blob> {
 }
 
 export async function retryFailed(migrationId: string) {
-  // Resume re-processes only PENDING/FAILED rows — that IS the retry semantic.
   return resumeMigration({ runId: migrationId });
 }
 
