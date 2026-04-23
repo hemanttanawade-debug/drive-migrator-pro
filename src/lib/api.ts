@@ -442,20 +442,32 @@ export async function getDashboard(migrationId?: string): Promise<DashboardSumma
   };
 }
 
-// ─── Settings: purge a completed migration ────────────────────────────────────
+// ─── Settings: reset everything ───────────────────────────────────────────────
 
 /**
- * DELETE /api/migration/<id>/purge — deletes EVERYTHING for the migration:
- * uploaded files, SQL state, GCS objects, logs, reports.
- * Falls back to existing /cleanup if /purge is not yet implemented.
+ * DELETE /api/reset — wipes filesystem (credentials, CSVs, session.json) and
+ * optionally deletes SQL rows for one/many run IDs or every migration row.
  */
-export async function purgeMigration(migrationId: string) {
-  let res = await apiFetch(`/api/migration/${migrationId}/purge`, { method: "DELETE" });
-  if (res.status === 404) {
-    res = await apiFetch(`/api/migration/${migrationId}/cleanup`, { method: "DELETE" });
-  }
-  return parseJSON<{ success: boolean; deleted?: string[]; message?: string }>(
-    res,
-    "Failed to delete migration data"
-  );
+export async function resetAll(opts?: {
+  runId?: string;
+  runIds?: string[];
+  deleteAll?: boolean;
+}) {
+  const res = await apiFetch("/api/reset", {
+    method: "DELETE",
+    body: JSON.stringify(opts ?? { deleteAll: true }),
+  });
+  return parseJSON<{
+    success: boolean;
+    new_session_id: string;
+    files_deleted: string[];
+    sql: {
+      runs_deleted: number;
+      items_deleted: number;
+      folders_deleted: number;
+      permissions_deleted: number;
+      users_deleted: number;
+      error: string | null;
+    };
+  }>(res, "Failed to reset migration data");
 }

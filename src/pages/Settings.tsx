@@ -8,28 +8,28 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useMigrationContext } from "@/components/migration/MigrationContext";
 import { useToast } from "@/hooks/use-toast";
-import { purgeMigration } from "@/lib/api";
+import { resetAll } from "@/lib/api";
 
 const Settings = () => {
-  const { state } = useMigrationContext();
+  const { state, isMigrationRunning } = useMigrationContext();
   const { toast } = useToast();
   const [purging, setPurging] = useState(false);
 
   const migrationId = state.migrationProgress.migrationId;
   const status = state.migrationProgress.status;
-  const canDelete = !!migrationId && (status === "completed" || status === "failed");
+  const canDelete = !isMigrationRunning;
 
-  const handlePurge = async () => {
-    if (!migrationId) return;
+  const handleDeleteAll = async () => {
     setPurging(true);
     try {
-      const res = await purgeMigration(migrationId);
+      const res = await resetAll({ deleteAll: true });
+      const sql = res.sql ?? { runs_deleted: 0, items_deleted: 0, folders_deleted: 0, permissions_deleted: 0, users_deleted: 0, error: null };
       toast({
-        title: "Migration data deleted",
-        description: res.message ?? `Cleared ${res.deleted?.length ?? 0} objects.`,
+        title: "All migration data deleted",
+        description: `Files: ${res.files_deleted?.length ?? 0} · Runs: ${sql.runs_deleted} · Items: ${sql.items_deleted}`,
       });
       // Soft refresh — easiest way to reset all client state too.
-      window.location.reload();
+      setTimeout(() => window.location.reload(), 600);
     } catch (e) {
       toast({ title: "Delete failed", description: e instanceof Error ? e.message : "", variant: "destructive" });
     } finally {
@@ -43,14 +43,14 @@ const Settings = () => {
         <CardHeader>
           <CardTitle>Migration data</CardTitle>
           <CardDescription>
-            Permanently delete everything related to the current migration: uploaded credentials, CSV mappings,
-            SQL state, GCS staging files, logs and reports.
+            Permanently delete everything: uploaded credentials, CSV mappings,
+            session state, and ALL SQL rows for every migration run.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="rounded-lg border bg-muted/40 p-4 space-y-1 text-sm">
             <div className="flex justify-between"><span className="text-muted-foreground">Session</span><span className="font-mono text-xs">{state.sessionId || "—"}</span></div>
-            <div className="flex justify-between"><span className="text-muted-foreground">Migration ID</span><span className="font-mono text-xs">{migrationId || "—"}</span></div>
+            <div className="flex justify-between"><span className="text-muted-foreground">Current Migration ID</span><span className="font-mono text-xs">{migrationId || "—"}</span></div>
             <div className="flex justify-between"><span className="text-muted-foreground">Status</span><span className="capitalize">{status}</span></div>
           </div>
 
@@ -59,7 +59,8 @@ const Settings = () => {
             <div className="text-sm">
               <p className="font-medium text-destructive">Destructive action</p>
               <p className="text-muted-foreground mt-1">
-                This cannot be undone. The button is enabled only after the migration finishes (completed or failed).
+                This wipes uploaded credentials, mapping CSVs, the session file, and every row in the
+                migration SQL tables. Disabled while a migration is actively running.
               </p>
             </div>
           </div>
@@ -72,15 +73,16 @@ const Settings = () => {
             </AlertDialogTrigger>
             <AlertDialogContent>
               <AlertDialogHeader>
-                <AlertDialogTitle>Delete this migration entirely?</AlertDialogTitle>
+                <AlertDialogTitle>Delete ALL migration data?</AlertDialogTitle>
                 <AlertDialogDescription>
-                  Uploads, SQL checkpoints, GCS objects, logs, and the report for migration{" "}
-                  <span className="font-mono">{migrationId}</span> will be removed. This cannot be undone.
+                  Every uploaded file, every session, and every row across migration_runs,
+                  migration_items, migration_folder_mapping, migration_permissions, and migration_users
+                  will be removed. This cannot be undone.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
                 <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction onClick={handlePurge} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+                <AlertDialogAction onClick={handleDeleteAll} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
                   Delete everything
                 </AlertDialogAction>
               </AlertDialogFooter>
