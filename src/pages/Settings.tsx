@@ -9,6 +9,7 @@ import {
 import { useMigrationContext } from "@/components/migration/MigrationContext";
 import { useToast } from "@/hooks/use-toast";
 import { resetAll } from "@/lib/api";
+import { clearPersistedWizardState } from "@/components/migration/useMigrationWizard";
 
 const Settings = () => {
   const { state, isMigrationRunning } = useMigrationContext();
@@ -28,6 +29,8 @@ const Settings = () => {
         title: "All migration data deleted",
         description: `Files: ${res.files_deleted?.length ?? 0} · Runs: ${sql.runs_deleted} · Items: ${sql.items_deleted}`,
       });
+      // Wipe persisted wizard inputs from this browser too.
+      clearPersistedWizardState();
       // Soft refresh — easiest way to reset all client state too.
       setTimeout(() => window.location.reload(), 600);
     } catch (e) {
