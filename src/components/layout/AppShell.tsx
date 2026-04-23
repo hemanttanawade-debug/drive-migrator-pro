@@ -1,8 +1,9 @@
 import { Outlet, NavLink, useLocation } from "react-router-dom";
-import { LayoutDashboard, FolderKanban, ScrollText, Settings, LogOut } from "lucide-react";
+import { LayoutDashboard, FolderKanban, ScrollText, Settings, LogOut, Sun, Moon } from "lucide-react";
 import AppLogo from "@/components/migration/AppLogo";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/context/AuthContext";
+import { useTheme } from "@/context/ThemeContext";
 import { cn } from "@/lib/utils";
 
 const navItems = [
@@ -21,6 +22,7 @@ const titleMap: Record<string, string> = {
 
 const AppShell = () => {
   const { user, logout } = useAuth();
+  const { theme, toggleTheme } = useTheme();
   const { pathname } = useLocation();
   const title = titleMap[pathname] ?? "Project";
 
@@ -72,8 +74,17 @@ const AppShell = () => {
       </aside>
 
       <main className="flex-1 flex flex-col min-w-0">
-        <header className="h-14 border-b border-border/70 bg-background/80 backdrop-blur-xl flex items-center px-6 sticky top-0 z-10">
+        <header className="h-14 border-b border-border/70 bg-background/80 backdrop-blur-xl flex items-center justify-between px-6 sticky top-0 z-10">
           <h1 className="text-base font-semibold">{title}</h1>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={toggleTheme}
+            aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+            className="h-8 w-8"
+          >
+            {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+          </Button>
         </header>
         <div className="flex-1 overflow-y-auto p-6">
           <Outlet />
