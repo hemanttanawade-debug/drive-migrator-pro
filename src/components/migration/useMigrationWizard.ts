@@ -902,7 +902,7 @@ export const useMigrationWizard = () => {
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = `migration-report-${state.migrationProgress.migrationId}.csv`;
+      link.download = `migration-${state.migrationProgress.migrationId}-sql-export.zip`;
       link.click();
       URL.revokeObjectURL(url);
     } catch (e) {
