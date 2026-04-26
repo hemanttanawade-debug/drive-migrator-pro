@@ -385,9 +385,10 @@ export const useMigrationWizard = () => {
   const updateMigrationConfig = useCallback(
     (config: MigrationConfig) => {
       if (!guardEdits()) return;
+      const nextMode = config.mode === "resume" ? "resume" : scopeToMode(config.scope);
       setState((c) => ({
         ...invalidateFromStep(2)(c),
-        migrationConfig: { ...config, mode: scopeToMode(config.scope) },
+        migrationConfig: { ...config, mode: nextMode },
         csvFile: config.scope === "shared-drives" ? null : c.csvFile,
         userMappings: config.scope === "shared-drives" ? [] : c.userMappings,
         sharedDriveCsvFile: config.scope === "my-drive" ? null : c.sharedDriveCsvFile,
