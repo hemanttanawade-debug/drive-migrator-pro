@@ -18,7 +18,7 @@ const Settings = () => {
 
   const migrationId = state.migrationProgress.migrationId;
   const status = state.migrationProgress.status;
-  const canDelete = !isMigrationRunning;
+  const canDelete = true;
 
   const handleDeleteAll = async () => {
     setPurging(true);
@@ -63,7 +63,7 @@ const Settings = () => {
               <p className="font-medium text-destructive">Destructive action</p>
               <p className="text-muted-foreground mt-1">
                 This wipes uploaded credentials, mapping CSVs, the session file, and every row in the
-                migration SQL tables. Disabled while a migration is actively running.
+                migration SQL tables. Use this when you need to unlock and start clean.
               </p>
             </div>
           </div>
