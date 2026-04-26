@@ -47,7 +47,7 @@ const Dashboard = () => {
     try {
       const blob = await downloadReport(migrationId);
       const url = URL.createObjectURL(blob);
-      const a = document.createElement("a"); a.href = url; a.download = `migration-${migrationId}.csv`; a.click();
+      const a = document.createElement("a"); a.href = url; a.download = `migration-${migrationId}-sql-export.zip`; a.click();
       URL.revokeObjectURL(url);
     } catch (e) {
       toast({ title: "Report download failed", description: e instanceof Error ? e.message : "", variant: "destructive" });
@@ -96,7 +96,7 @@ const Dashboard = () => {
             <FileText className="w-3.5 h-3.5 mr-2" /> Log (.txt)
           </Button>
           <Button size="sm" onClick={handleReport} disabled={!migrationId}>
-            <Download className="w-3.5 h-3.5 mr-2" /> Report (.csv)
+            <Download className="w-3.5 h-3.5 mr-2" /> Report (.zip)
           </Button>
         </div>
       </div>
