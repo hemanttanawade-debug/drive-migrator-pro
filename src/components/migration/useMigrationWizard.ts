@@ -387,7 +387,7 @@ export const useMigrationWizard = () => {
       if (!guardEdits()) return;
       const nextMode = config.mode === "resume" ? "resume" : scopeToMode(config.scope);
       setState((c) => ({
-        ...invalidateFromStep(2)(c),
+        ...invalidateFromStep(c.currentStep >= 3 ? 3 : 2)(c),
         migrationConfig: { ...config, mode: nextMode },
         csvFile: config.scope === "shared-drives" ? null : c.csvFile,
         userMappings: config.scope === "shared-drives" ? [] : c.userMappings,
