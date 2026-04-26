@@ -12,7 +12,7 @@ import { resetAll } from "@/lib/api";
 import { clearPersistedWizardState } from "@/components/migration/useMigrationWizard";
 
 const Settings = () => {
-  const { state, isMigrationRunning } = useMigrationContext();
+  const { state } = useMigrationContext();
   const { toast } = useToast();
   const [purging, setPurging] = useState(false);
 
