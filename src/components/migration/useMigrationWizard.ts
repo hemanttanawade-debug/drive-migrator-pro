@@ -275,7 +275,29 @@ export const useMigrationWizard = () => {
         if (cfg.lastDiscoveryRunId && !runIdRef.current) {
           runIdRef.current = cfg.lastDiscoveryRunId;
         }
-        setState((c) => ({
+        const currentRunId = state.migrationProgress.migrationId || runIdRef.current || cfg.lastDiscoveryRunId;
+        const serverProgress = currentRunId ? await getMigrationStatus(currentRunId).catch(() => null) : null;
+
+        setState((c) => {
+          const staleRunning = c.migrationProgress.status === "running" && !cfg.migrationActive;
+          const nextProgress = serverProgress
+            ? {
+                ...c.migrationProgress,
+                ...serverProgress,
+                status: serverProgress.status === "running" && !cfg.migrationActive ? "failed" : serverProgress.status,
+                logs: staleRunning
+                  ? [...c.migrationProgress.logs, "[WARN] Backend is not actively migrating. UI unlocked — use Resume to continue this run."]
+                  : c.migrationProgress.logs,
+              }
+            : staleRunning
+              ? {
+                  ...c.migrationProgress,
+                  status: c.migrationProgress.migrationId ? "failed" : "pending",
+                  logs: [...c.migrationProgress.logs, "[WARN] Backend is not actively migrating. UI unlocked — use Resume to continue this run."],
+                }
+              : c.migrationProgress;
+
+          return {
           ...c,
           sessionId: cfg.sessionId || c.sessionId,
           domainConfig: {
@@ -285,7 +307,9 @@ export const useMigrationWizard = () => {
             destinationDomain: c.domainConfig.destinationDomain || cfg.destinationDomain,
             destinationAdminEmail: c.domainConfig.destinationAdminEmail || cfg.destinationAdminEmail,
           },
-        }));
+          migrationProgress: nextProgress,
+        };
+        });
       } catch { /* ignore */ }
     })();
     return () => { cancelled = true; };
