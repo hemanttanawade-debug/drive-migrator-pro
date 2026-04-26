@@ -688,6 +688,10 @@ export const useMigrationWizard = () => {
 
   const runPreScan = useCallback(async () => {
     if (!guardEdits()) return;
+    if (state.migrationConfig.mode === "resume") {
+      toast({ title: "Resume selected", description: "Select Save & Continue, then start the resume from the execution step." });
+      return;
+    }
 
     const userMapping = buildUserMapping();
     if (Object.keys(userMapping).length === 0) {
@@ -717,20 +721,19 @@ export const useMigrationWizard = () => {
     } finally {
       setLoading("scanning", false);
     }
-  }, [buildUserMapping, ensureSession, guardEdits, resetRunId, setLoading, toast]);
+  }, [buildUserMapping, ensureSession, guardEdits, resetRunId, setLoading, state.migrationConfig.mode, toast]);
 
   // ─── Step 5: Start / Resume migration ──────────────────────────────────────
 
   const startMigrationRun = useCallback(async () => {
-    if (!state.scan.scanned) {
+    const isResume = state.migrationConfig.mode === "resume";
+    if (!isResume && !state.scan.scanned) {
       toast({ title: "Run a scan first", description: "Scanning is required before starting.", variant: "destructive" });
       return;
     }
     setLoading("startingMigration", true);
     try {
       await ensureSession();
-      const isResume = state.migrationConfig.mode === "resume";
-
       const runId = isResume
         ? (state.migrationConfig.resumeMigrationId?.trim() || ensureRunId())
         : ensureRunId();
