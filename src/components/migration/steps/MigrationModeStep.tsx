@@ -36,7 +36,7 @@ const MigrationModeStep = ({ config, onChange, onSubmit, onBack, isSubmitting, l
   const [runs, setRuns] = useState<MigrationRunRow[]>([]);
   const [loadingRuns, setLoadingRuns] = useState(false);
 
-  const resumableRuns = runs.filter((r) => r.resumable);
+  const resumableRuns = runs.filter((r) => r.resumable || r.pending > 0);
   const isValid = !locked && (!isResume || (config.resumeMigrationId?.trim().length ?? 0) > 0);
 
   const fetchRuns = async () => {
@@ -152,7 +152,7 @@ const MigrationModeStep = ({ config, onChange, onSubmit, onBack, isSubmitting, l
                   variant="ghost"
                   size="sm"
                   onClick={fetchRuns}
-                  disabled={loadingRuns || locked}
+                  disabled={loadingRuns}
                   className="h-7 px-2"
                 >
                   <RefreshCw className={cn("w-3.5 h-3.5 mr-1", loadingRuns && "animate-spin")} />
@@ -172,7 +172,7 @@ const MigrationModeStep = ({ config, onChange, onSubmit, onBack, isSubmitting, l
                 <Select
                   value={config.resumeMigrationId || ""}
                   onValueChange={(v) => onChange({ ...config, resumeMigrationId: v })}
-                  disabled={locked}
+                  disabled={false}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Select a previous run" />

@@ -275,7 +275,29 @@ export const useMigrationWizard = () => {
         if (cfg.lastDiscoveryRunId && !runIdRef.current) {
           runIdRef.current = cfg.lastDiscoveryRunId;
         }
-        setState((c) => ({
+        const currentRunId = state.migrationProgress.migrationId || runIdRef.current || cfg.lastDiscoveryRunId;
+        const serverProgress = currentRunId ? await getMigrationStatus(currentRunId).catch(() => null) : null;
+
+        setState((c) => {
+          const staleRunning = c.migrationProgress.status === "running" && !cfg.migrationActive;
+          const nextProgress = serverProgress
+            ? {
+                ...c.migrationProgress,
+                ...serverProgress,
+                status: serverProgress.status === "running" && !cfg.migrationActive ? "failed" : serverProgress.status,
+                logs: staleRunning
+                  ? [...c.migrationProgress.logs, "[WARN] Backend is not actively migrating. UI unlocked — use Resume to continue this run."]
+                  : c.migrationProgress.logs,
+              }
+            : staleRunning
+              ? {
+                  ...c.migrationProgress,
+                  status: c.migrationProgress.migrationId ? "failed" : "pending",
+                  logs: [...c.migrationProgress.logs, "[WARN] Backend is not actively migrating. UI unlocked — use Resume to continue this run."],
+                }
+              : c.migrationProgress;
+
+          return {
           ...c,
           sessionId: cfg.sessionId || c.sessionId,
           domainConfig: {
@@ -285,7 +307,9 @@ export const useMigrationWizard = () => {
             destinationDomain: c.domainConfig.destinationDomain || cfg.destinationDomain,
             destinationAdminEmail: c.domainConfig.destinationAdminEmail || cfg.destinationAdminEmail,
           },
-        }));
+          migrationProgress: nextProgress,
+        };
+        });
       } catch { /* ignore */ }
     })();
     return () => { cancelled = true; };
@@ -361,9 +385,10 @@ export const useMigrationWizard = () => {
   const updateMigrationConfig = useCallback(
     (config: MigrationConfig) => {
       if (!guardEdits()) return;
+      const nextMode = config.mode === "resume" ? "resume" : scopeToMode(config.scope);
       setState((c) => ({
-        ...invalidateFromStep(2)(c),
-        migrationConfig: { ...config, mode: scopeToMode(config.scope) },
+        ...invalidateFromStep(c.currentStep >= 3 ? 3 : 2)(c),
+        migrationConfig: { ...config, mode: nextMode },
         csvFile: config.scope === "shared-drives" ? null : c.csvFile,
         userMappings: config.scope === "shared-drives" ? [] : c.userMappings,
         sharedDriveCsvFile: config.scope === "my-drive" ? null : c.sharedDriveCsvFile,
@@ -663,6 +688,10 @@ export const useMigrationWizard = () => {
 
   const runPreScan = useCallback(async () => {
     if (!guardEdits()) return;
+    if (state.migrationConfig.mode === "resume") {
+      toast({ title: "Resume selected", description: "Select Save & Continue, then start the resume from the execution step." });
+      return;
+    }
 
     const userMapping = buildUserMapping();
     if (Object.keys(userMapping).length === 0) {
@@ -692,20 +721,19 @@ export const useMigrationWizard = () => {
     } finally {
       setLoading("scanning", false);
     }
-  }, [buildUserMapping, ensureSession, guardEdits, resetRunId, setLoading, toast]);
+  }, [buildUserMapping, ensureSession, guardEdits, resetRunId, setLoading, state.migrationConfig.mode, toast]);
 
   // ─── Step 5: Start / Resume migration ──────────────────────────────────────
 
   const startMigrationRun = useCallback(async () => {
-    if (!state.scan.scanned) {
+    const isResume = state.migrationConfig.mode === "resume";
+    if (!isResume && !state.scan.scanned) {
       toast({ title: "Run a scan first", description: "Scanning is required before starting.", variant: "destructive" });
       return;
     }
     setLoading("startingMigration", true);
     try {
       await ensureSession();
-      const isResume = state.migrationConfig.mode === "resume";
-
       const runId = isResume
         ? (state.migrationConfig.resumeMigrationId?.trim() || ensureRunId())
         : ensureRunId();
@@ -874,7 +902,7 @@ export const useMigrationWizard = () => {
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = `migration-report-${state.migrationProgress.migrationId}.csv`;
+      link.download = `migration-${state.migrationProgress.migrationId}-sql-export.zip`;
       link.click();
       URL.revokeObjectURL(url);
     } catch (e) {
