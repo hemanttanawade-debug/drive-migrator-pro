@@ -72,6 +72,10 @@ export interface MigrationProgress {
   totalUsers: number;
   filesMigrated: number;
   failedFiles: number;
+  filesTotal?: number;
+  filesDone?: number;
+  dataTransferredGb?: number;
+  dataTotalGb?: number;
   logs: string[];
 }
 
