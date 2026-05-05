@@ -241,6 +241,8 @@ export const useMigrationWizard = () => {
     startingMigration: false,
     downloadingReport: false,
     retrying: false,
+    syncing: false,
+    resuming: false,
   });
   const { toast } = useToast();
   const completionNoticeRef = useRef<string | null>(null);
