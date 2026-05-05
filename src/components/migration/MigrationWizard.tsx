@@ -76,12 +76,16 @@ const MigrationWizard = () => {
           scan={w.state.scan}
           onScan={w.runPreScan}
           onStart={w.startMigrationRun}
+          onResume={w.resumeRun}
+          onSync={w.syncStatus}
           onBack={w.goBack}
           onDownloadReport={w.downloadMigrationReport}
           onRetry={w.retryFailedItems}
           loading={{
             scanning: w.loadingStates.scanning,
             startingMigration: w.loadingStates.startingMigration,
+            syncing: w.loadingStates.syncing,
+            resuming: w.loadingStates.resuming,
           }}
         />
       )}
