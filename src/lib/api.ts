@@ -356,6 +356,8 @@ export async function getMigrationStatus(migrationId: string) {
       files_failed?: number;
       files_done?: number;
       files_total?: number;
+      data_transferred_gb?: number;
+      data_total_gb?: number;
     };
     summary?: any;
   }>(res, "Failed to get migration status");
@@ -374,6 +376,10 @@ export async function getMigrationStatus(migrationId: string) {
     totalUsers: totals.total_users ?? 0,
     filesMigrated: totals.files_migrated ?? 0,
     failedFiles: totals.files_failed ?? 0,
+    filesDone: totals.files_done ?? 0,
+    filesTotal: totals.files_total ?? 0,
+    dataTransferredGb: totals.data_transferred_gb ?? 0,
+    dataTotalGb: totals.data_total_gb ?? 0,
     logs: [] as string[],
   };
 }
