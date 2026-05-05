@@ -728,21 +728,15 @@ export const useMigrationWizard = () => {
   // ─── Step 5: Start / Resume migration ──────────────────────────────────────
 
   const startMigrationRun = useCallback(async () => {
-    const isResume = state.migrationConfig.mode === "resume";
-    if (!isResume && !state.scan.scanned) {
+    if (!state.scan.scanned) {
       toast({ title: "Run a scan first", description: "Scanning is required before starting.", variant: "destructive" });
       return;
     }
     setLoading("startingMigration", true);
     try {
       await ensureSession();
-      const runId = isResume
-        ? (state.migrationConfig.resumeMigrationId?.trim() || ensureRunId())
-        : ensureRunId();
-
-      const res = isResume
-        ? await resumeMigration({ runId })
-        : await startMigrationFresh({ runId, userMapping: buildUserMapping() });
+      const runId = ensureRunId();
+      const res = await startMigrationFresh({ runId, userMapping: buildUserMapping() });
 
       completionNoticeRef.current = null;
       migrationTokenRef.current = null;
@@ -754,23 +748,86 @@ export const useMigrationWizard = () => {
           migrationId: res.run_id,
           status: "running",
           totalUsers: res.total_users || c.userMappings.length,
-          logs: [
-            isResume
-              ? `[INFO] Resuming migration ${res.run_id}`
-              : `[INFO] Migration queued with id=${res.run_id}`,
-          ],
+          dataTotalGb: c.scan.totalSizeGb,
+          filesTotal: c.scan.totalFiles,
+          logs: [`[INFO] Migration queued with id=${res.run_id}`],
         },
       }));
-      toast({
-        title: isResume ? "Migration resumed" : "Migration started",
-        description: `Migration ${res.run_id} is running.`,
-      });
+      toast({ title: "Migration started", description: `Migration ${res.run_id} is running.` });
     } catch (e) {
       toast({ title: "Could not start migration", description: getErrorMessage(e), variant: "destructive" });
     } finally {
       setLoading("startingMigration", false);
     }
-  }, [buildUserMapping, ensureRunId, ensureSession, setLoading, state.migrationConfig.mode, state.migrationConfig.resumeMigrationId, state.scan.scanned, state.userMappings.length, toast]);
+  }, [buildUserMapping, ensureRunId, ensureSession, setLoading, state.scan.scanned, state.userMappings.length, toast]);
+
+  const resumeRun = useCallback(async (runId: string) => {
+    if (!runId) {
+      toast({ title: "Pick a run", description: "Select a previous run to resume.", variant: "destructive" });
+      return;
+    }
+    setLoading("resuming", true);
+    try {
+      await ensureSession();
+      const res = await resumeMigration({ runId });
+      runIdRef.current = res.run_id;
+      completionNoticeRef.current = null;
+      migrationTokenRef.current = null;
+
+      setState((c) => ({
+        ...c,
+        migrationProgress: {
+          ...createInitialProgress(),
+          migrationId: res.run_id,
+          status: "running",
+          totalUsers: res.total_users || 0,
+          filesDone: res.done_files || 0,
+          filesTotal: (res.pending_files || 0) + (res.done_files || 0),
+          logs: [
+            `[INFO] Resuming migration ${res.run_id}`,
+            `[INFO] ${res.pending_files} pending · ${res.done_files} already done`,
+          ],
+        },
+      }));
+      toast({ title: "Migration resumed", description: `Migration ${res.run_id} is running.` });
+    } catch (e) {
+      toast({ title: "Could not resume migration", description: getErrorMessage(e), variant: "destructive" });
+    } finally {
+      setLoading("resuming", false);
+    }
+  }, [ensureSession, setLoading, toast]);
+
+  const syncStatus = useCallback(async () => {
+    const id = state.migrationProgress.migrationId || runIdRef.current;
+    if (!id) {
+      toast({ title: "No active migration", description: "Start or resume a migration first." });
+      return;
+    }
+    setLoading("syncing", true);
+    try {
+      const res = await getMigrationStatus(id);
+      setState((c) => ({
+        ...c,
+        migrationProgress: {
+          ...c.migrationProgress,
+          migrationId: res.migrationId,
+          status: res.status,
+          totalUsers: res.totalUsers || c.migrationProgress.totalUsers,
+          filesMigrated: res.filesMigrated || c.migrationProgress.filesMigrated,
+          failedFiles: res.failedFiles || c.migrationProgress.failedFiles,
+          filesDone: res.filesDone || c.migrationProgress.filesDone,
+          filesTotal: res.filesTotal || c.migrationProgress.filesTotal,
+          dataTransferredGb: res.dataTransferredGb || c.migrationProgress.dataTransferredGb,
+          dataTotalGb: res.dataTotalGb || c.migrationProgress.dataTotalGb,
+        },
+      }));
+      toast({ title: "Synced", description: `Status: ${res.status}` });
+    } catch (e) {
+      toast({ title: "Sync failed", description: getErrorMessage(e), variant: "destructive" });
+    } finally {
+      setLoading("syncing", false);
+    }
+  }, [setLoading, state.migrationProgress.migrationId, toast]);
 
   // ─── Live progress: SSE for migration logs/phase ────────────────────────────
 
