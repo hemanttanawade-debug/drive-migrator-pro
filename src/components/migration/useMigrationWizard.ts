@@ -1025,6 +1025,8 @@ export const useMigrationWizard = () => {
     submitMigrationMode,
     runPreScan,
     startMigrationRun,
+    resumeRun,
+    syncStatus,
     downloadMigrationReport,
     retryFailedItems,
   };
