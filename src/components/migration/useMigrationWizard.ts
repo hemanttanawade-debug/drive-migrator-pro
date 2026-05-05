@@ -926,6 +926,10 @@ export const useMigrationWizard = () => {
             totalUsers:    res.totalUsers    || c.migrationProgress.totalUsers,
             filesMigrated: res.filesMigrated || c.migrationProgress.filesMigrated,
             failedFiles:   res.failedFiles   || c.migrationProgress.failedFiles,
+            filesDone:     res.filesDone     || c.migrationProgress.filesDone,
+            filesTotal:    res.filesTotal    || c.migrationProgress.filesTotal,
+            dataTransferredGb: res.dataTransferredGb || c.migrationProgress.dataTransferredGb,
+            dataTotalGb:   res.dataTotalGb   || c.migrationProgress.dataTotalGb,
           },
           completedSteps: isDone ? markStepCompleted(c.completedSteps, 4) : c.completedSteps,
         }));
