@@ -854,6 +854,12 @@ export const useMigrationWizard = () => {
         }
         if (signal.cancelled) return;
 
+        // ✅ ADD THIS GUARD — abort if token fetch silently returned null/undefined
+        if (!migrationTokenRef.current) {
+          console.warn("[migration SSE] No stream token — skipping SSE, polling will cover status.");
+          return;
+        }
+
         const url = buildApiUrl(
           `/api/migration/stream` +
           `?run_id=${encodeURIComponent(runId)}` +
