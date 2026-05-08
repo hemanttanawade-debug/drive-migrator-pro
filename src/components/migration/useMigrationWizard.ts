@@ -864,8 +864,33 @@ export const useMigrationWizard = () => {
     setLoading("resuming", true);
     try {
       await ensureSession();
-      const res = await resumeMigration({ runId });
-      runIdRef.current = res.run_id;
+      const scope = state.migrationConfig.scope;
+
+      let resolvedRunId = runId;
+      let totalUsers = 0;
+      let pendingFiles = 0;
+      let doneFiles = 0;
+
+      if (scope === "shared-drives") {
+        const res = await resumeSharedDriveMigration({ runId });
+        resolvedRunId = res.run_id;
+      } else {
+        const res = await resumeMigration({ runId });
+        resolvedRunId = res.run_id;
+        totalUsers = res.total_users || 0;
+        pendingFiles = res.pending_files || 0;
+        doneFiles = res.done_files || 0;
+
+        if (scope === "both") {
+          try {
+            await resumeSharedDriveMigration({ runId: resolvedRunId });
+          } catch (err) {
+            console.warn("[shared-drive resume (both)]", err);
+          }
+        }
+      }
+
+      runIdRef.current = resolvedRunId;
       completionNoticeRef.current = null;
       migrationTokenRef.current = null;
 
@@ -873,24 +898,26 @@ export const useMigrationWizard = () => {
         ...c,
         migrationProgress: {
           ...createInitialProgress(),
-          migrationId: res.run_id,
+          migrationId: resolvedRunId,
           status: "running",
-          totalUsers: res.total_users || 0,
-          filesDone: res.done_files || 0,
-          filesTotal: (res.pending_files || 0) + (res.done_files || 0),
+          totalUsers,
+          filesDone: doneFiles,
+          filesTotal: pendingFiles + doneFiles,
           logs: [
-            `[INFO] Resuming migration ${res.run_id}`,
-            `[INFO] ${res.pending_files} pending · ${res.done_files} already done`,
+            `[INFO] Resuming migration ${resolvedRunId}`,
+            scope === "shared-drives"
+              ? `[INFO] Resuming shared drive migration`
+              : `[INFO] ${pendingFiles} pending · ${doneFiles} already done`,
           ],
         },
       }));
-      toast({ title: "Migration resumed", description: `Migration ${res.run_id} is running.` });
+      toast({ title: "Migration resumed", description: `Migration ${resolvedRunId} is running.` });
     } catch (e) {
       toast({ title: "Could not resume migration", description: getErrorMessage(e), variant: "destructive" });
     } finally {
       setLoading("resuming", false);
     }
-  }, [ensureSession, setLoading, toast]);
+  }, [ensureSession, setLoading, state.migrationConfig.scope, toast]);
 
   const syncStatus = useCallback(async () => {
     const id = state.migrationProgress.migrationId || runIdRef.current;
