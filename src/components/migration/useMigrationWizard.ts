@@ -473,6 +473,14 @@ export const useMigrationWizard = () => {
     return map;
   }, [state.userMappings]);
 
+  const buildDriveIdMapping = useCallback((): Record<string, string> => {
+    const map: Record<string, string> = {};
+    for (const m of state.sharedDriveMappings) {
+      if (m.sourceDriveId && m.destinationDriveId) map[m.sourceDriveId] = m.destinationDriveId;
+    }
+    return map;
+  }, [state.sharedDriveMappings]);
+
   // ─── Step 1: Domain config ──────────────────────────────────────────────────
 
   const submitDomainConfig = useCallback(async () => {
