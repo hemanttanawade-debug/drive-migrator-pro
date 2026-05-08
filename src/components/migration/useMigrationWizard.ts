@@ -733,23 +733,58 @@ export const useMigrationWizard = () => {
       return;
     }
 
+    const scope = state.migrationConfig.scope;
     const userMapping = buildUserMapping();
-    if (Object.keys(userMapping).length === 0) {
+    const driveMapping = buildDriveIdMapping();
+
+    const wantMyDrive = scope === "my-drive" || scope === "both";
+    const wantSharedDrives = scope === "shared-drives" || scope === "both";
+
+    if (wantMyDrive && Object.keys(userMapping).length === 0) {
       toast({ title: "No users to scan", description: "Upload a user mapping first.", variant: "destructive" });
+      return;
+    }
+    if (wantSharedDrives && Object.keys(driveMapping).length === 0) {
+      toast({ title: "No shared drives to scan", description: "Upload a shared drive mapping first.", variant: "destructive" });
       return;
     }
 
     setLoading("scanning", true);
-
-    // Fresh run ID for each new scan so we never 409-conflict with a previous run
     const runId = resetRunId();
 
     try {
       const sessionId = await ensureSession();
 
-      const { totals } = await startDiscovery({ runId, userMapping, sessionId });
+      let totalFiles = 0;
+      let totalFolders = 0;
+      let totalSizeBytes = 0;
 
-      const scan = totalsToScanSummary(totals);
+      if (wantMyDrive) {
+        const { totals } = await startDiscovery({ runId, userMapping, sessionId });
+        totalFiles += totals.total_files;
+        totalFolders += totals.total_folders;
+        totalSizeBytes += totals.total_size_bytes;
+      }
+
+      if (wantSharedDrives) {
+        const { totals } = await startSharedDriveDiscovery({
+          runId,
+          driveIdMapping: driveMapping,
+          sessionId,
+        });
+        totalFiles += totals.total_files;
+        totalFolders += totals.total_folders;
+        totalSizeBytes += totals.total_size_bytes;
+      }
+
+      const scan = totalsToScanSummary({
+        total_users: 0,
+        completed_users: 0,
+        failed_users: 0,
+        total_files: totalFiles,
+        total_folders: totalFolders,
+        total_size_bytes: totalSizeBytes,
+      });
       setState((c) => ({ ...c, scan }));
 
       toast({
@@ -761,7 +796,7 @@ export const useMigrationWizard = () => {
     } finally {
       setLoading("scanning", false);
     }
-  }, [buildUserMapping, ensureSession, guardEdits, resetRunId, setLoading, state.migrationConfig.mode, toast]);
+  }, [buildDriveIdMapping, buildUserMapping, ensureSession, guardEdits, resetRunId, setLoading, state.migrationConfig.mode, state.migrationConfig.scope, toast]);
 
   // ─── Step 5: Start / Resume migration ──────────────────────────────────────
 
@@ -774,7 +809,29 @@ export const useMigrationWizard = () => {
     try {
       await ensureSession();
       const runId = ensureRunId();
-      const res = await startMigrationFresh({ runId, userMapping: buildUserMapping() });
+      const scope = state.migrationConfig.scope;
+
+      let resolvedRunId = runId;
+      let totalUsers = 0;
+
+      if (scope === "shared-drives") {
+        const res = await startSharedDriveMigration({ runId, driveIdMapping: buildDriveIdMapping() });
+        resolvedRunId = res.run_id;
+        totalUsers = state.sharedDriveMappings.length;
+      } else {
+        const res = await startMigrationFresh({ runId, userMapping: buildUserMapping() });
+        resolvedRunId = res.run_id;
+        totalUsers = res.total_users || state.userMappings.length;
+
+        // For "both", also kick off the SD migration on the same run_id
+        if (scope === "both" && state.sharedDriveMappings.length > 0) {
+          try {
+            await startSharedDriveMigration({ runId: resolvedRunId, driveIdMapping: buildDriveIdMapping() });
+          } catch (err) {
+            console.warn("[shared-drive start (both)]", err);
+          }
+        }
+      }
 
       completionNoticeRef.current = null;
       migrationTokenRef.current = null;
@@ -783,21 +840,21 @@ export const useMigrationWizard = () => {
         ...c,
         migrationProgress: {
           ...createInitialProgress(),
-          migrationId: res.run_id,
+          migrationId: resolvedRunId,
           status: "running",
-          totalUsers: res.total_users || c.userMappings.length,
+          totalUsers,
           dataTotalGb: c.scan.totalSizeGb,
           filesTotal: c.scan.totalFiles,
-          logs: [`[INFO] Migration queued with id=${res.run_id}`],
+          logs: [`[INFO] Migration queued with id=${resolvedRunId}`],
         },
       }));
-      toast({ title: "Migration started", description: `Migration ${res.run_id} is running.` });
+      toast({ title: "Migration started", description: `Migration ${resolvedRunId} is running.` });
     } catch (e) {
       toast({ title: "Could not start migration", description: getErrorMessage(e), variant: "destructive" });
     } finally {
       setLoading("startingMigration", false);
     }
-  }, [buildUserMapping, ensureRunId, ensureSession, setLoading, state.scan.scanned, state.userMappings.length, toast]);
+  }, [buildDriveIdMapping, buildUserMapping, ensureRunId, ensureSession, setLoading, state.migrationConfig.scope, state.scan.scanned, state.sharedDriveMappings.length, state.userMappings.length, toast]);
 
   const resumeRun = useCallback(async (runId: string) => {
     if (!runId) {
