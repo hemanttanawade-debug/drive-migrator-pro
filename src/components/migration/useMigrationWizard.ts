@@ -641,8 +641,34 @@ export const useMigrationWizard = () => {
       const normalized = await normalizeSharedDriveFile(state.sharedDriveCsvFile);
       const res = await uploadSharedDriveMapping(normalized, sessionId);
 
-      setState((c) => ({ ...c, sharedDriveMappings: res.mappings }));
-      toast({ title: "Shared Drive mapping uploaded", description: `${res.mappings.length} drives saved to Flask.` });
+      // Enrich with storage sizes from the SD endpoint
+      let enriched: SharedDriveMappingRow[] = res.mappings;
+      try {
+        setLoading("fetchingSizes", true);
+        const rows = await fetchSharedDriveStorageSizes(
+          res.mappings.map((m) => ({
+            source_drive_id: m.sourceDriveId,
+            dest_drive_id: m.destinationDriveId,
+          })),
+          sessionId,
+        );
+        const sizeBySrc = new Map(rows.map((r) => [r.source_drive_id, r]));
+        enriched = res.mappings.map((m) => {
+          const r = sizeBySrc.get(m.sourceDriveId);
+          return {
+            ...m,
+            sourceSizeGb: r?.source_total_gb ?? null,
+            destinationSizeGb: r?.dest_total_gb ?? null,
+          };
+        });
+      } catch (err) {
+        console.warn("[shared-drive sizes]", err);
+      } finally {
+        setLoading("fetchingSizes", false);
+      }
+
+      setState((c) => ({ ...c, sharedDriveMappings: enriched }));
+      toast({ title: "Shared Drive mapping uploaded", description: `${enriched.length} drives saved to Flask.` });
     } catch (e) {
       toast({ title: "Could not upload shared drive mapping", description: getErrorMessage(e), variant: "destructive" });
     } finally {
