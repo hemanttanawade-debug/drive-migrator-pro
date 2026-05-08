@@ -205,6 +205,97 @@ export async function fetchStorageSizes(
   return data.sizes ?? {};
 }
 
+// ─── Shared Drive storage sizes ──────────────────────────────────────────────
+
+export interface SharedDriveStorageRow {
+  source_drive_id: string;
+  source_drive_name: string | null;
+  source_total_bytes: number | null;
+  source_total_gb: number | null;
+  source_file_count: number | null;
+  source_error: string | null;
+  dest_drive_id: string;
+  dest_drive_name: string | null;
+  dest_total_bytes: number | null;
+  dest_total_gb: number | null;
+  dest_file_count: number | null;
+  dest_error: string | null;
+}
+
+/** POST /api/shared-drive/storage-sizes — fetch source+dest sizes per drive pair */
+export async function fetchSharedDriveStorageSizes(
+  pairs: { source_drive_id: string; dest_drive_id: string }[],
+  sessionId?: string,
+): Promise<SharedDriveStorageRow[]> {
+  const res = await apiFetch("/api/shared-drive/storage-sizes", {
+    method: "POST",
+    body: JSON.stringify({ drive_pairs: pairs, ...(sessionId ? { sessionId } : {}) }),
+  });
+  const data = await parseJSON<{ rows?: SharedDriveStorageRow[] }>(
+    res,
+    "Failed to fetch shared drive storage sizes",
+  );
+  return data.rows ?? [];
+}
+
+// ─── Shared Drive Discovery / Migration ──────────────────────────────────────
+
+/** POST /api/shared-drive/discovery/start — synchronous SD scan */
+export async function startSharedDriveDiscovery(params: {
+  runId: string;
+  driveIdMapping: Record<string, string>;
+  workers?: number;
+  sessionId?: string;
+}): Promise<{
+  run_id: string;
+  totals: {
+    total_drives: number;
+    completed_drives: number;
+    failed_drives: number;
+    total_files: number;
+    total_folders: number;
+    total_size_bytes: number;
+  };
+  results: unknown[];
+}> {
+  const res = await apiFetch("/api/shared-drive/discovery/start", {
+    method: "POST",
+    body: JSON.stringify({
+      runId: params.runId,
+      driveIdMapping: params.driveIdMapping,
+      workers: params.workers ?? 4,
+      ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+    }),
+  });
+  return parseJSON(res, "Failed to run shared drive discovery");
+}
+
+/** POST /api/shared-drive/migrate/start */
+export async function startSharedDriveMigration(params: {
+  runId: string;
+  driveIdMapping?: Record<string, string>;
+}): Promise<{ success: boolean; run_id: string; message: string }> {
+  const res = await apiFetch("/api/shared-drive/migrate/start", {
+    method: "POST",
+    body: JSON.stringify({
+      runId: params.runId,
+      ...(params.driveIdMapping ? { driveIdMapping: params.driveIdMapping } : {}),
+    }),
+  });
+  return parseJSON(res, "Failed to start shared drive migration");
+}
+
+/** POST /api/shared-drive/migrate/resume */
+export async function resumeSharedDriveMigration(params: {
+  runId: string;
+}): Promise<{ success: boolean; run_id: string; message: string }> {
+  const res = await apiFetch("/api/shared-drive/migrate/resume", {
+    method: "POST",
+    body: JSON.stringify({ runId: params.runId }),
+  });
+  return parseJSON(res, "Failed to resume shared drive migration");
+}
+
 // ─── Step 4: migration mode ───────────────────────────────────────────────────
 
 export async function saveMigrationMode(mode: string, sessionId?: string) {
