@@ -164,9 +164,20 @@ export async function uploadSharedDriveMapping(file: File, sessionId?: string) {
   fd.append("file", file);
   if (sessionId) fd.append("sessionId", sessionId);
   const res = await apiFetch("/api/shared-drive-mapping", { method: "POST", body: fd });
-  return parseJSON<{
-    mappings: { sourceDriveId: string; destinationDriveId: string }[];
+
+  // Backend returns { mapping: { src_id: dst_id, ... }, total: N }
+  const data = await parseJSON<{
+    mapping?: Record<string, string>;
+    total?: number;
   }>(res, "Failed to upload shared drive mapping");
+
+  // Convert flat dict → array of objects the rest of the frontend expects
+  const mappings = Object.entries(data.mapping ?? {}).map(([srcId, dstId]) => ({
+    sourceDriveId: srcId,
+    destinationDriveId: dstId,
+  }));
+
+  return { mappings };
 }
 
 // ─── Storage sizes ────────────────────────────────────────────────────────────
@@ -471,6 +482,46 @@ export async function getMigrationStatus(migrationId: string) {
     filesTotal: totals.files_total ?? 0,
     dataTransferredGb: totals.data_transferred_gb ?? 0,
     dataTotalGb: totals.data_total_gb ?? 0,
+    logs: [] as string[],
+  };
+}
+
+// After getMigrationStatus() in api__2_.ts
+
+export async function getSharedDriveMigrationStatus(migrationId: string) {
+  const res = await apiFetch(`/api/shared-drive/migrate/status?run_id=${encodeURIComponent(migrationId)}`);
+  const data = await parseJSON<{
+    run_id?: string;
+    status: string;
+    totals?: {
+      drives_total?: number;
+      drives_done?: number;
+      files_migrated?: number;
+      files_failed?: number;
+      files_ignored?: number;
+      folders_created?: number;
+    };
+    summary?: any;
+  }>(res, "Failed to get shared drive migration status");
+
+  const totals = data.totals ?? {};
+  const raw = (data.status || "").toLowerCase();
+  let status: "pending" | "running" | "completed" | "failed";
+  if (raw === "running" || raw === "in_progress") status = "running";
+  else if (raw === "done" || raw === "completed") status = "completed";
+  else if (raw === "error" || raw === "failed") status = "failed";
+  else status = "pending";
+
+  return {
+    migrationId: data.run_id ?? migrationId,
+    status,
+    totalUsers: totals.drives_total ?? 0,
+    filesMigrated: totals.files_migrated ?? 0,
+    failedFiles: totals.files_failed ?? 0,
+    filesDone: totals.files_migrated ?? 0,
+    filesTotal: (totals.files_migrated ?? 0) + (totals.files_failed ?? 0),
+    dataTransferredGb: 0,
+    dataTotalGb: 0,
     logs: [] as string[],
   };
 }

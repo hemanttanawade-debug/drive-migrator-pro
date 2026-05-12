@@ -5,6 +5,7 @@ import {
   fetchStorageSizes,
   fetchSharedDriveStorageSizes,
   getMigrationStatus,
+  getSharedDriveMigrationStatus,
   retryFailed,
   saveConfig,
   saveMigrationMode,
@@ -282,7 +283,14 @@ export const useMigrationWizard = () => {
           runIdRef.current = cfg.lastDiscoveryRunId;
         }
         const currentRunId = state.migrationProgress.migrationId || runIdRef.current || cfg.lastDiscoveryRunId;
-        const serverProgress = currentRunId ? await getMigrationStatus(currentRunId).catch(() => null) : null;
+        const persistedScope = state.migrationConfig.scope;
+        const isSharedDrive = persistedScope === "shared-drives";
+        const serverProgress = currentRunId
+          ? await (isSharedDrive
+              ? getSharedDriveMigrationStatus(currentRunId)
+              : getMigrationStatus(currentRunId)
+            ).catch(() => null)
+          : null;
 
         setState((c) => {
           const staleRunning = c.migrationProgress.status === "running" && !cfg.migrationActive;
@@ -650,18 +658,19 @@ export const useMigrationWizard = () => {
       const res = await uploadSharedDriveMapping(normalized, sessionId);
 
       // Enrich with storage sizes from the SD endpoint
-      let enriched: SharedDriveMappingRow[] = res.mappings;
+      const rawMappings = res.mappings ?? [];
+      let enriched: SharedDriveMappingRow[] = rawMappings;
       try {
         setLoading("fetchingSizes", true);
         const rows = await fetchSharedDriveStorageSizes(
-          res.mappings.map((m) => ({
+          rawMappings.map((m) => ({
             source_drive_id: m.sourceDriveId,
             dest_drive_id: m.destinationDriveId,
           })),
           sessionId,
         );
         const sizeBySrc = new Map(rows.map((r) => [r.source_drive_id, r]));
-        enriched = res.mappings.map((m) => {
+        enriched = rawMappings.map((m) => {
           const r = sizeBySrc.get(m.sourceDriveId);
           return {
             ...m,
@@ -687,10 +696,17 @@ export const useMigrationWizard = () => {
   const completeMappingStep = useCallback(() => {
     if (!guardEdits()) return;
     const { scope } = state.migrationConfig;
-    const myDriveOk = scope === "shared-drives" || state.userMappings.length > 0;
-    const sharedOk = scope === "my-drive" || state.sharedDriveMappings.length > 0;
-    if (!myDriveOk || !sharedOk) {
-      toast({ title: "Mappings missing", description: "Upload all required CSV files first.", variant: "destructive" });
+
+    const hasUserMappings   = state.userMappings.length > 0;
+    const hasSharedMappings = state.sharedDriveMappings.length > 0;
+
+    // At least one mapping must be uploaded
+    if (!hasUserMappings && !hasSharedMappings) {
+      toast({
+        title: "Mappings missing",
+        description: "Upload at least one CSV file (user mapping or shared drive mapping).",
+        variant: "destructive",
+      });
       return;
     }
 
@@ -927,7 +943,10 @@ export const useMigrationWizard = () => {
     }
     setLoading("syncing", true);
     try {
-      const res = await getMigrationStatus(id);
+      const isSharedDrive = state.migrationConfig.scope === "shared-drives";
+      const res = isSharedDrive
+        ? await getSharedDriveMigrationStatus(id)
+        : await getMigrationStatus(id);
       setState((c) => ({
         ...c,
         migrationProgress: {
@@ -949,7 +968,7 @@ export const useMigrationWizard = () => {
     } finally {
       setLoading("syncing", false);
     }
-  }, [setLoading, state.migrationProgress.migrationId, toast]);
+  }, [setLoading, state.migrationProgress.migrationId, state.migrationConfig.scope, toast]);
 
   // ─── Live progress: SSE for migration logs/phase ────────────────────────────
 
@@ -1039,7 +1058,10 @@ export const useMigrationWizard = () => {
 
     const poll = async () => {
       try {
-        const res = await getMigrationStatus(state.migrationProgress.migrationId);
+        const isSharedDrive = state.migrationConfig.scope === "shared-drives";
+        const res = isSharedDrive
+          ? await getSharedDriveMigrationStatus(state.migrationProgress.migrationId)
+          : await getMigrationStatus(state.migrationProgress.migrationId);
         if (cancelled) return;
         const nextStatus = res.status as MigrationProgress["status"];
         const isDone = nextStatus === "completed" || nextStatus === "failed";
@@ -1081,7 +1103,7 @@ export const useMigrationWizard = () => {
     void poll();
     const id = window.setInterval(() => void poll(), 3000);
     return () => { cancelled = true; window.clearInterval(id); };
-  }, [state.migrationProgress.migrationId, state.migrationProgress.status, toast]);
+  }, [state.migrationProgress.migrationId, state.migrationProgress.status, state.migrationConfig.scope, toast]);
 
   // ─── Step 6: Reports & retry ────────────────────────────────────────────────
 
