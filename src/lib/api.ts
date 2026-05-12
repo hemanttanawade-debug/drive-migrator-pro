@@ -612,6 +612,7 @@ export interface PersistedConfig {
   destinationAdminEmail: string;
   migrationMode: string;
   lastDiscoveryRunId: string;
+  lastSdDiscoveryRunId?: string;
   sourceCredExists: boolean;
   destCredExists: boolean;
   csvExists: boolean;
@@ -623,7 +624,22 @@ export async function getCurrentConfig(): Promise<PersistedConfig | null> {
   try {
     const res = await apiFetch("/api/config/current");
     if (!res.ok) return null;
-    return (await res.json()) as PersistedConfig;
+    const data: any = await res.json();
+    const cfg = data.config ?? data;
+    return {
+      sessionId: data.sessionId ?? data.session_id ?? cfg.sessionId ?? cfg.session_id ?? "",
+      sourceDomain: data.sourceDomain ?? data.source_domain ?? cfg.sourceDomain ?? cfg.source_domain ?? "",
+      sourceAdminEmail: data.sourceAdminEmail ?? data.source_admin_email ?? cfg.sourceAdminEmail ?? cfg.source_admin_email ?? "",
+      destinationDomain: data.destinationDomain ?? data.dest_domain ?? cfg.destinationDomain ?? cfg.dest_domain ?? "",
+      destinationAdminEmail: data.destinationAdminEmail ?? data.dest_admin_email ?? cfg.destinationAdminEmail ?? cfg.dest_admin_email ?? "",
+      migrationMode: data.migrationMode ?? data.migration_mode ?? cfg.migrationMode ?? cfg.migration_mode ?? "",
+      lastDiscoveryRunId: data.lastDiscoveryRunId ?? data.last_discovery_run_id ?? cfg.lastDiscoveryRunId ?? cfg.last_discovery_run_id ?? data.run_id ?? "",
+      lastSdDiscoveryRunId: data.lastSdDiscoveryRunId ?? data.last_sd_discovery_run_id ?? cfg.lastSdDiscoveryRunId ?? cfg.last_sd_discovery_run_id ?? "",
+      sourceCredExists: Boolean(data.sourceCredExists ?? data.source_cred_exists ?? data.credentials?.source),
+      destCredExists: Boolean(data.destCredExists ?? data.dest_cred_exists ?? data.credentials?.dest),
+      csvExists: Boolean(data.csvExists ?? data.csv_exists),
+      migrationActive: Boolean(data.migrationActive ?? data.migration_active),
+    };
   } catch {
     return null;
   }
