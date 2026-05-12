@@ -479,7 +479,7 @@ function normalizeRunRow(r: any, kind?: "my-drive" | "shared-drive"): MigrationR
     done,
     source_domain: r.source_domain ?? "",
     dest_domain: r.dest_domain ?? "",
-    resumable: Boolean(r.resumable ?? pending > 0 || failed > 0),
+    resumable: Boolean(r.resumable ?? (pending > 0 || failed > 0)),
   };
 }
 
