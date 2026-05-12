@@ -74,6 +74,7 @@ const MigrationWizard = () => {
         <ExecutionStep
           progress={w.state.migrationProgress}
           scan={w.state.scan}
+          scope={w.state.migrationConfig.scope}
           onScan={w.runPreScan}
           onStart={w.startMigrationRun}
           onResume={w.resumeRun}
