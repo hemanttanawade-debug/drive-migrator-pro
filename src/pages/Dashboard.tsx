@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Download, FileText, RefreshCw, Users, CheckCircle2, Loader2, XCircle, HardDrive } from "lucide-react";
 import { useEffect, useState } from "react";
-import { downloadLogs, downloadReport, getDashboard } from "@/lib/api";
+import { downloadLogs, downloadReport, getDashboard, getSharedDriveMigrationStatus } from "@/lib/api";
 import { useMigrationContext } from "@/components/migration/MigrationContext";
 import { useToast } from "@/hooks/use-toast";
 import type { DashboardSummary } from "@/types/migration";
@@ -22,13 +22,29 @@ const Dashboard = () => {
   const { state } = useMigrationContext();
   const { toast } = useToast();
   const migrationId = state.migrationProgress.migrationId;
+  const isSharedDrive = state.migrationConfig.scope === "shared-drives";
   const [data, setData] = useState<DashboardSummary | null>(null);
   const [loading, setLoading] = useState(false);
 
   const refresh = async () => {
     setLoading(true);
     try {
-      setData(await getDashboard(migrationId || undefined));
+      if (isSharedDrive && migrationId) {
+        const status = await getSharedDriveMigrationStatus(migrationId);
+        setData({
+          totalUsers: status.totalUsers,
+          completed: status.status === "completed" ? status.totalUsers : 0,
+          inProgress: status.status === "running" ? status.totalUsers : 0,
+          failed: status.failedFiles,
+          filesMigrated: status.filesMigrated,
+          filesTotal: status.filesTotal,
+          dataTransferredGb: status.dataTransferredGb,
+          dataTotalGb: status.dataTotalGb,
+          rows: [],
+        });
+      } else {
+        setData(await getDashboard(migrationId || undefined));
+      }
     } catch (e) {
       toast({ title: "Could not load dashboard", description: e instanceof Error ? e.message : "", variant: "destructive" });
     } finally {
@@ -40,7 +56,7 @@ const Dashboard = () => {
     void refresh();
     // No auto-polling — user explicitly clicks "Sync" / Refresh.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [migrationId]);
+  }, [migrationId, isSharedDrive]);
 
   const handleReport = async () => {
     if (!migrationId) return;
