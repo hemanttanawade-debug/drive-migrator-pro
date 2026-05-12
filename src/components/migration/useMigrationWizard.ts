@@ -6,6 +6,7 @@ import {
   fetchSharedDriveStorageSizes,
   getMigrationStatus,
   getSharedDriveMigrationStatus,
+  getSharedDriveStreamToken,
   retryFailed,
   saveConfig,
   saveMigrationMode,
@@ -279,11 +280,14 @@ export const useMigrationWizard = () => {
         const cfg = await getCurrentConfig();
         if (!cfg || cancelled) return;
         if (cfg.sourceCredExists || cfg.destCredExists) configSavedRef.current = true;
-        if (cfg.lastDiscoveryRunId && !runIdRef.current) {
-          runIdRef.current = cfg.lastDiscoveryRunId;
-        }
-        const currentRunId = state.migrationProgress.migrationId || runIdRef.current || cfg.lastDiscoveryRunId;
         const persistedScope = state.migrationConfig.scope;
+        const configRunId = persistedScope === "shared-drives"
+          ? (cfg.lastSdDiscoveryRunId || cfg.lastDiscoveryRunId)
+          : cfg.lastDiscoveryRunId;
+        if (configRunId && !runIdRef.current) {
+          runIdRef.current = configRunId;
+        }
+        const currentRunId = state.migrationProgress.migrationId || runIdRef.current || configRunId;
         const isSharedDrive = persistedScope === "shared-drives";
         const serverProgress = currentRunId
           ? await (isSharedDrive
