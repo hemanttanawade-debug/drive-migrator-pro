@@ -447,6 +447,7 @@ export async function resumeMigration(params: {
 
 export interface MigrationRunRow {
   run_id: string;
+  kind?: "my-drive" | "shared-drive";
   status: string;
   start_time: string | null;
   end_time: string | null;
@@ -460,10 +461,38 @@ export interface MigrationRunRow {
   resumable: boolean;
 }
 
+function normalizeRunRow(r: any, kind?: "my-drive" | "shared-drive"): MigrationRunRow {
+  const total = r.total_items ?? r.total ?? r.files_total ?? 0;
+  const done = r.done ?? r.completed_items ?? r.completed ?? 0;
+  const failed = r.failed ?? r.failed_items ?? 0;
+  const pending = r.pending ?? Math.max(0, total - done - failed);
+  return {
+    run_id: r.run_id ?? r.migration_id ?? r.id ?? "",
+    kind,
+    status: r.status ?? "unknown",
+    start_time: r.start_time ?? null,
+    end_time: r.end_time ?? null,
+    total_items: total,
+    completed: r.completed ?? done,
+    failed,
+    pending,
+    done,
+    source_domain: r.source_domain ?? "",
+    dest_domain: r.dest_domain ?? "",
+    resumable: Boolean(r.resumable ?? pending > 0 || failed > 0),
+  };
+}
+
 export async function listMigrationRuns(): Promise<MigrationRunRow[]> {
   const res = await apiFetch("/api/migration/runs");
-  const data = await parseJSON<{ runs: MigrationRunRow[] }>(res, "Failed to list runs");
-  return data.runs ?? [];
+  const data = await parseJSON<{ runs: any[] }>(res, "Failed to list runs");
+  return (data.runs ?? []).map((r) => normalizeRunRow(r, "my-drive")).filter((r) => r.run_id);
+}
+
+export async function listSharedDriveMigrationRuns(): Promise<MigrationRunRow[]> {
+  const res = await apiFetch("/api/shared-drive/migrate/runs");
+  const data = await parseJSON<{ runs: any[] }>(res, "Failed to list shared drive runs");
+  return (data.runs ?? []).map((r) => normalizeRunRow(r, "shared-drive")).filter((r) => r.run_id);
 }
 
 export async function getMigrationStatus(migrationId: string) {
