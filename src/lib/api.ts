@@ -384,10 +384,29 @@ export function totalsToScanSummary(totals: DiscoveryTotals): ScanSummary {
  * EventSource cannot send Authorization headers, so the backend issues a
  * short-lived single-use token (?stream_token=…) for the migration SSE URL.
  */
-export async function getStreamToken(): Promise<string> {
-  const res = await apiFetch("/api/migration/stream-token", { method: "POST" });
-  const data = await parseJSON<{ stream_token: string }>(res, "Failed to get stream token");
-  return data.stream_token;
+export async function getStreamToken(runId?: string): Promise<string> {
+  const res = await apiFetch("/api/migration/stream-token", {
+    method: "POST",
+    body: JSON.stringify(runId ? { runId, run_id: runId } : {}),
+  });
+  const data = await parseJSON<{ stream_token?: string; token?: string }>(res, "Failed to get stream token");
+  const token = data.stream_token ?? data.token;
+  if (!token) throw new Error("Failed to get stream token");
+  return token;
+}
+
+export async function getSharedDriveStreamToken(runId: string): Promise<string> {
+  const res = await apiFetch("/api/shared-drive/migrate/stream-token", {
+    method: "POST",
+    body: JSON.stringify({ runId, run_id: runId }),
+  });
+  const data = await parseJSON<{ token?: string; stream_token?: string }>(
+    res,
+    "Failed to get shared drive stream token",
+  );
+  const token = data.token ?? data.stream_token;
+  if (!token) throw new Error("Failed to get shared drive stream token");
+  return token;
 }
 
 // ─── Migration execution ──────────────────────────────────────────────────────
