@@ -284,10 +284,14 @@ export const useMigrationWizard = () => {
         const configRunId = persistedScope === "shared-drives"
           ? (cfg.lastSdDiscoveryRunId || cfg.lastDiscoveryRunId)
           : cfg.lastDiscoveryRunId;
-        if (configRunId && !runIdRef.current) {
+        if (persistedScope === "shared-drives" && cfg.lastSdDiscoveryRunId) {
+          runIdRef.current = cfg.lastSdDiscoveryRunId;
+        } else if (configRunId && !runIdRef.current) {
           runIdRef.current = configRunId;
         }
-        const currentRunId = state.migrationProgress.migrationId || runIdRef.current || configRunId;
+        const currentRunId = persistedScope === "shared-drives"
+          ? (cfg.lastSdDiscoveryRunId || state.migrationProgress.migrationId || runIdRef.current || configRunId)
+          : (state.migrationProgress.migrationId || runIdRef.current || configRunId);
         const isSharedDrive = persistedScope === "shared-drives";
         const serverProgress = currentRunId
           ? await (isSharedDrive
