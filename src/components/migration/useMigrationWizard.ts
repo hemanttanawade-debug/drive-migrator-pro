@@ -1009,8 +1009,11 @@ export const useMigrationWizard = () => {
 
     (async () => {
       try {
+        const isSharedDrive = state.migrationConfig.scope === "shared-drives";
         if (!migrationTokenRef.current) {
-          migrationTokenRef.current = await getStreamToken();
+          migrationTokenRef.current = isSharedDrive
+            ? await getSharedDriveStreamToken(runId)
+            : await getStreamToken(runId);
         }
         if (signal.cancelled) return;
 
@@ -1021,9 +1024,9 @@ export const useMigrationWizard = () => {
         }
 
         const url = buildApiUrl(
-          `/api/migration/stream` +
-          `?run_id=${encodeURIComponent(runId)}` +
-          `&stream_token=${encodeURIComponent(migrationTokenRef.current)}`,
+          isSharedDrive
+            ? `/api/shared-drive/migrate/stream?run_id=${encodeURIComponent(runId)}&token=${encodeURIComponent(migrationTokenRef.current)}`
+            : `/api/migration/stream?run_id=${encodeURIComponent(runId)}&stream_token=${encodeURIComponent(migrationTokenRef.current)}`,
         );
 
         const es = await openAuthenticatedStream(
@@ -1060,7 +1063,7 @@ export const useMigrationWizard = () => {
       migrationEsRef.current?.close();
       migrationEsRef.current = null;
     };
-  }, [state.migrationProgress.migrationId, state.migrationProgress.status]);
+  }, [state.migrationProgress.migrationId, state.migrationProgress.status, state.migrationConfig.scope]);
 
   useEffect(() => {
     if (state.migrationProgress.status === "running") return;
