@@ -384,10 +384,29 @@ export function totalsToScanSummary(totals: DiscoveryTotals): ScanSummary {
  * EventSource cannot send Authorization headers, so the backend issues a
  * short-lived single-use token (?stream_token=…) for the migration SSE URL.
  */
-export async function getStreamToken(): Promise<string> {
-  const res = await apiFetch("/api/migration/stream-token", { method: "POST" });
-  const data = await parseJSON<{ stream_token: string }>(res, "Failed to get stream token");
-  return data.stream_token;
+export async function getStreamToken(runId?: string): Promise<string> {
+  const res = await apiFetch("/api/migration/stream-token", {
+    method: "POST",
+    body: JSON.stringify(runId ? { runId, run_id: runId } : {}),
+  });
+  const data = await parseJSON<{ stream_token?: string; token?: string }>(res, "Failed to get stream token");
+  const token = data.stream_token ?? data.token;
+  if (!token) throw new Error("Failed to get stream token");
+  return token;
+}
+
+export async function getSharedDriveStreamToken(runId: string): Promise<string> {
+  const res = await apiFetch("/api/shared-drive/migrate/stream-token", {
+    method: "POST",
+    body: JSON.stringify({ runId, run_id: runId }),
+  });
+  const data = await parseJSON<{ token?: string; stream_token?: string }>(
+    res,
+    "Failed to get shared drive stream token",
+  );
+  const token = data.token ?? data.stream_token;
+  if (!token) throw new Error("Failed to get shared drive stream token");
+  return token;
 }
 
 // ─── Migration execution ──────────────────────────────────────────────────────
@@ -428,6 +447,7 @@ export async function resumeMigration(params: {
 
 export interface MigrationRunRow {
   run_id: string;
+  kind?: "my-drive" | "shared-drive";
   status: string;
   start_time: string | null;
   end_time: string | null;
@@ -441,10 +461,38 @@ export interface MigrationRunRow {
   resumable: boolean;
 }
 
+function normalizeRunRow(r: any, kind?: "my-drive" | "shared-drive"): MigrationRunRow {
+  const total = r.total_items ?? r.total ?? r.files_total ?? 0;
+  const done = r.done ?? r.completed_items ?? r.completed ?? 0;
+  const failed = r.failed ?? r.failed_items ?? 0;
+  const pending = r.pending ?? Math.max(0, total - done - failed);
+  return {
+    run_id: r.run_id ?? r.migration_id ?? r.id ?? "",
+    kind,
+    status: r.status ?? "unknown",
+    start_time: r.start_time ?? null,
+    end_time: r.end_time ?? null,
+    total_items: total,
+    completed: r.completed ?? done,
+    failed,
+    pending,
+    done,
+    source_domain: r.source_domain ?? "",
+    dest_domain: r.dest_domain ?? "",
+    resumable: Boolean(r.resumable ?? (pending > 0 || failed > 0)),
+  };
+}
+
 export async function listMigrationRuns(): Promise<MigrationRunRow[]> {
   const res = await apiFetch("/api/migration/runs");
-  const data = await parseJSON<{ runs: MigrationRunRow[] }>(res, "Failed to list runs");
-  return data.runs ?? [];
+  const data = await parseJSON<{ runs: any[] }>(res, "Failed to list runs");
+  return (data.runs ?? []).map((r) => normalizeRunRow(r, "my-drive")).filter((r) => r.run_id);
+}
+
+export async function listSharedDriveMigrationRuns(): Promise<MigrationRunRow[]> {
+  const res = await apiFetch("/api/shared-drive/migrate/runs");
+  const data = await parseJSON<{ runs: any[] }>(res, "Failed to list shared drive runs");
+  return (data.runs ?? []).map((r) => normalizeRunRow(r, "shared-drive")).filter((r) => r.run_id);
 }
 
 export async function getMigrationStatus(migrationId: string) {
@@ -564,6 +612,7 @@ export interface PersistedConfig {
   destinationAdminEmail: string;
   migrationMode: string;
   lastDiscoveryRunId: string;
+  lastSdDiscoveryRunId?: string;
   sourceCredExists: boolean;
   destCredExists: boolean;
   csvExists: boolean;
@@ -575,7 +624,22 @@ export async function getCurrentConfig(): Promise<PersistedConfig | null> {
   try {
     const res = await apiFetch("/api/config/current");
     if (!res.ok) return null;
-    return (await res.json()) as PersistedConfig;
+    const data: any = await res.json();
+    const cfg = data.config ?? data;
+    return {
+      sessionId: data.sessionId ?? data.session_id ?? cfg.sessionId ?? cfg.session_id ?? "",
+      sourceDomain: data.sourceDomain ?? data.source_domain ?? cfg.sourceDomain ?? cfg.source_domain ?? "",
+      sourceAdminEmail: data.sourceAdminEmail ?? data.source_admin_email ?? cfg.sourceAdminEmail ?? cfg.source_admin_email ?? "",
+      destinationDomain: data.destinationDomain ?? data.dest_domain ?? cfg.destinationDomain ?? cfg.dest_domain ?? "",
+      destinationAdminEmail: data.destinationAdminEmail ?? data.dest_admin_email ?? cfg.destinationAdminEmail ?? cfg.dest_admin_email ?? "",
+      migrationMode: data.migrationMode ?? data.migration_mode ?? cfg.migrationMode ?? cfg.migration_mode ?? "",
+      lastDiscoveryRunId: data.lastDiscoveryRunId ?? data.last_discovery_run_id ?? cfg.lastDiscoveryRunId ?? cfg.last_discovery_run_id ?? data.run_id ?? "",
+      lastSdDiscoveryRunId: data.lastSdDiscoveryRunId ?? data.last_sd_discovery_run_id ?? cfg.lastSdDiscoveryRunId ?? cfg.last_sd_discovery_run_id ?? "",
+      sourceCredExists: Boolean(data.sourceCredExists ?? data.source_cred_exists ?? data.credentials?.source),
+      destCredExists: Boolean(data.destCredExists ?? data.dest_cred_exists ?? data.credentials?.dest),
+      csvExists: Boolean(data.csvExists ?? data.csv_exists),
+      migrationActive: Boolean(data.migrationActive ?? data.migration_active),
+    };
   } catch {
     return null;
   }

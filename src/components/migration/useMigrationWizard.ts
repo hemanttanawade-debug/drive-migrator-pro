@@ -6,6 +6,7 @@ import {
   fetchSharedDriveStorageSizes,
   getMigrationStatus,
   getSharedDriveMigrationStatus,
+  getSharedDriveStreamToken,
   retryFailed,
   saveConfig,
   saveMigrationMode,
@@ -115,6 +116,13 @@ const scopeToMode = (scope: WizardState["migrationConfig"]["scope"]): WizardStat
   if (scope === "shared-drives") return "shared-drives";
   if (scope === "both") return "full";
   return "custom";
+};
+
+const modeToScope = (mode?: string): WizardState["migrationConfig"]["scope"] | null => {
+  if (mode === "shared-drives") return "shared-drives";
+  if (mode === "full") return "both";
+  if (mode === "custom") return "my-drive";
+  return null;
 };
 
 // ─── SSE helpers (migration only) ────────────────────────────────────────────
@@ -279,11 +287,19 @@ export const useMigrationWizard = () => {
         const cfg = await getCurrentConfig();
         if (!cfg || cancelled) return;
         if (cfg.sourceCredExists || cfg.destCredExists) configSavedRef.current = true;
-        if (cfg.lastDiscoveryRunId && !runIdRef.current) {
-          runIdRef.current = cfg.lastDiscoveryRunId;
+        const backendScope = modeToScope(cfg.migrationMode);
+        const persistedScope = backendScope ?? state.migrationConfig.scope;
+        const configRunId = persistedScope === "shared-drives"
+          ? (cfg.lastSdDiscoveryRunId || cfg.lastDiscoveryRunId)
+          : cfg.lastDiscoveryRunId;
+        if (persistedScope === "shared-drives" && cfg.lastSdDiscoveryRunId) {
+          runIdRef.current = cfg.lastSdDiscoveryRunId;
+        } else if (configRunId && !runIdRef.current) {
+          runIdRef.current = configRunId;
         }
-        const currentRunId = state.migrationProgress.migrationId || runIdRef.current || cfg.lastDiscoveryRunId;
-        const persistedScope = state.migrationConfig.scope;
+        const currentRunId = persistedScope === "shared-drives"
+          ? (cfg.lastSdDiscoveryRunId || state.migrationProgress.migrationId || runIdRef.current || configRunId)
+          : (state.migrationProgress.migrationId || runIdRef.current || configRunId);
         const isSharedDrive = persistedScope === "shared-drives";
         const serverProgress = currentRunId
           ? await (isSharedDrive
@@ -322,6 +338,9 @@ export const useMigrationWizard = () => {
             destinationAdminEmail: c.domainConfig.destinationAdminEmail || cfg.destinationAdminEmail,
           },
           migrationProgress: nextProgress,
+          migrationConfig: backendScope
+            ? { ...c.migrationConfig, scope: backendScope, mode: scopeToMode(backendScope) }
+            : c.migrationConfig,
         };
         });
       } catch { /* ignore */ }
@@ -990,8 +1009,11 @@ export const useMigrationWizard = () => {
 
     (async () => {
       try {
+        const isSharedDrive = state.migrationConfig.scope === "shared-drives";
         if (!migrationTokenRef.current) {
-          migrationTokenRef.current = await getStreamToken();
+          migrationTokenRef.current = isSharedDrive
+            ? await getSharedDriveStreamToken(runId)
+            : await getStreamToken(runId);
         }
         if (signal.cancelled) return;
 
@@ -1002,9 +1024,9 @@ export const useMigrationWizard = () => {
         }
 
         const url = buildApiUrl(
-          `/api/migration/stream` +
-          `?run_id=${encodeURIComponent(runId)}` +
-          `&stream_token=${encodeURIComponent(migrationTokenRef.current)}`,
+          isSharedDrive
+            ? `/api/shared-drive/migrate/stream?run_id=${encodeURIComponent(runId)}&token=${encodeURIComponent(migrationTokenRef.current)}`
+            : `/api/migration/stream?run_id=${encodeURIComponent(runId)}&stream_token=${encodeURIComponent(migrationTokenRef.current)}`,
         );
 
         const es = await openAuthenticatedStream(
@@ -1041,7 +1063,7 @@ export const useMigrationWizard = () => {
       migrationEsRef.current?.close();
       migrationEsRef.current = null;
     };
-  }, [state.migrationProgress.migrationId, state.migrationProgress.status]);
+  }, [state.migrationProgress.migrationId, state.migrationProgress.status, state.migrationConfig.scope]);
 
   useEffect(() => {
     if (state.migrationProgress.status === "running") return;

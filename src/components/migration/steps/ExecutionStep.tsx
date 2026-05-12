@@ -12,6 +12,7 @@ import {
 import { cn } from "@/lib/utils";
 import { downloadLogs, listMigrationRuns, type MigrationRunRow } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
+import type { MigrationConfig } from "@/types/migration";
 
 interface Props {
   progress: MigrationProgress;
@@ -23,6 +24,7 @@ interface Props {
   onBack: () => void;
   onDownloadReport: () => void;
   onRetry: () => void;
+  scope: MigrationConfig["scope"];
   loading: { scanning: boolean; startingMigration: boolean; syncing?: boolean; resuming?: boolean };
 }
 
@@ -35,7 +37,7 @@ const statusColors: Record<string, string> = {
 
 const ExecutionStep = ({
   progress, scan, onScan, onStart, onResume, onSync, onBack,
-  onDownloadReport, onRetry, loading,
+  onDownloadReport, onRetry, scope, loading,
 }: Props) => {
   const [copied, setCopied] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
@@ -86,16 +88,37 @@ const ExecutionStep = ({
   const fetchRuns = async () => {
     setLoadingRuns(true);
     try {
+      if (scope === "shared-drives") {
+        setRuns(progress.migrationId ? [{
+          run_id: progress.migrationId,
+          kind: "shared-drive",
+          status: progress.status,
+          start_time: null,
+          end_time: null,
+          total_items: progress.filesTotal ?? 0,
+          completed: progress.filesDone ?? progress.filesMigrated,
+          failed: progress.failedFiles,
+          pending: Math.max(0, (progress.filesTotal ?? 0) - (progress.filesDone ?? progress.filesMigrated) - progress.failedFiles),
+          done: progress.filesDone ?? progress.filesMigrated,
+          source_domain: "",
+          dest_domain: "",
+          resumable: progress.status !== "running",
+        }] : []);
+        return;
+      }
       const list = await listMigrationRuns();
       setRuns(list);
     } catch (e) {
-      toast({ title: "Could not load past runs", description: e instanceof Error ? e.message : "", variant: "destructive" });
+      console.warn("[migration runs]", e);
+      if (progress.migrationId) {
+        setRuns([{ run_id: progress.migrationId, status: progress.status, start_time: null, end_time: null, total_items: progress.filesTotal ?? 0, completed: progress.filesDone ?? progress.filesMigrated, failed: progress.failedFiles, pending: 0, done: progress.filesDone ?? progress.filesMigrated, source_domain: "", dest_domain: "", resumable: progress.status !== "running" }]);
+      }
     } finally {
       setLoadingRuns(false);
     }
   };
 
-  useEffect(() => { void fetchRuns(); }, []);
+  useEffect(() => { void fetchRuns(); }, [scope, progress.migrationId]);
 
   const resumableRuns = runs.filter((r) => r.resumable || r.pending > 0);
 
