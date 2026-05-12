@@ -118,6 +118,13 @@ const scopeToMode = (scope: WizardState["migrationConfig"]["scope"]): WizardStat
   return "custom";
 };
 
+const modeToScope = (mode?: string): WizardState["migrationConfig"]["scope"] | null => {
+  if (mode === "shared-drives") return "shared-drives";
+  if (mode === "full") return "both";
+  if (mode === "custom") return "my-drive";
+  return null;
+};
+
 // ─── SSE helpers (migration only) ────────────────────────────────────────────
 
 async function openAuthenticatedStream(
@@ -280,7 +287,8 @@ export const useMigrationWizard = () => {
         const cfg = await getCurrentConfig();
         if (!cfg || cancelled) return;
         if (cfg.sourceCredExists || cfg.destCredExists) configSavedRef.current = true;
-        const persistedScope = state.migrationConfig.scope;
+        const backendScope = modeToScope(cfg.migrationMode);
+        const persistedScope = backendScope ?? state.migrationConfig.scope;
         const configRunId = persistedScope === "shared-drives"
           ? (cfg.lastSdDiscoveryRunId || cfg.lastDiscoveryRunId)
           : cfg.lastDiscoveryRunId;
@@ -330,6 +338,9 @@ export const useMigrationWizard = () => {
             destinationAdminEmail: c.domainConfig.destinationAdminEmail || cfg.destinationAdminEmail,
           },
           migrationProgress: nextProgress,
+          migrationConfig: backendScope
+            ? { ...c.migrationConfig, scope: backendScope, mode: scopeToMode(backendScope) }
+            : c.migrationConfig,
         };
         });
       } catch { /* ignore */ }
